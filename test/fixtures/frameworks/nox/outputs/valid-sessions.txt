@@ -1,0 +1,10 @@
+Sessions defined in /path/to/project/noxfile.py:
+
+* tests-3.8 -> Run tests with Python 3.8
+* tests-3.9 -> Run tests with Python 3.9
+* tests-3.10 -> Run tests with Python 3.10
+* lint -> Run linting checks
+- docs -> Build documentation
+- coverage -> Generate coverage report
+
+sessions marked with * are selected, sessions marked with - are skipped.

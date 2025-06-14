@@ -1,0 +1,149 @@
+{
+  "name": "taskmosaic",
+  "displayName": "TaskMosaic",
+  "description": "Browse and run tasks from multiple frameworks.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "taskMosaic",
+          "title": "TaskMosaic",
+          "icon": "$(beaker)"
+        }
+      ]
+    },
+    "views": {
+      "taskMosaic": [
+        {
+          "id": "taskMosaic",
+          "name": "TaskMosaic",
+          "icon": "play"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "taskMosaic.refreshTasks",
+        "title": "Refresh Tasks",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "taskMosaic.toggleViewMode",
+        "title": "Toggle View Mode",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "taskMosaic.runTask",
+        "title": "Run Task",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskMosaic.runParentTask",
+        "title": "Run All",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskMosaic.runTagGroup",
+        "title": "Run All Tasks in Tag Group",
+        "icon": "$(play-circle)"
+      },
+      {
+        "command": "taskMosaic.runAllDefaultTasks",
+        "title": "Run All Default Tasks",
+        "icon": "$(play-circle)"
+      },
+      {
+        "command": "taskMosaic.runTaskWithArgs",
+        "title": "Run with Arguments"
+      },
+      {
+        "command": "taskMosaic.runParentTaskWithArgs",
+        "title": "Run All with Arguments"
+      },
+      {
+        "command": "taskMosaic.runTaskVerbose",
+        "title": "Run with Verbose Output"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "taskMosaic.runAllDefaultTasks",
+          "when": "view == taskMosaic",
+          "group": "navigation"
+        },
+        {
+          "command": "taskMosaic.toggleViewMode",
+          "when": "view == taskMosaic",
+          "group": "navigation"
+        },
+        {
+          "command": "taskMosaic.refreshTasks",
+          "when": "view == taskMosaic",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "taskMosaic.runTagGroup",
+          "when": "view == taskMosaic && viewItem == categoryGroup",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.runTask",
+          "when": "view == taskMosaic && viewItem == task",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.runParentTask",
+          "when": "view == taskMosaic && viewItem == matrixGroup",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.runTaskWithArgs",
+          "when": "view == taskMosaic && viewItem == task",
+          "group": "1_run@2"
+        },
+        {
+          "command": "taskMosaic.runTaskVerbose",
+          "when": "view == taskMosaic && viewItem == task",
+          "group": "1_run@3"
+        },
+        {
+          "command": "taskMosaic.runParentTaskWithArgs",
+          "when": "view == taskMosaic && viewItem == matrixGroup",
+          "group": "1_run@2"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "jest --coverage",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^14.0.0",
+    "@types/vscode": "^1.70.0",
+    "@typescript-eslint/eslint-plugin": "^8.34.0",
+    "@typescript-eslint/parser": "^8.34.0",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.29.0",
+    "jest": "^30.0.5",
+    "prettier": "^3.6.0",
+    "ts-jest": "^29.4.1",
+    "typescript": "^4.9.5"
+  }
+}

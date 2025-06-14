@@ -1,0 +1,9 @@
+{
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "jest.runMode": "on-demand",
+    "jest.outputConfig": {
+        "revealOnError": true,
+        "clearOnRun": "terminal"
+    },
+    "testing.automaticallyOpenTestResults": "neverOpen"
+}

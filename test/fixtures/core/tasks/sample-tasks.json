@@ -1,0 +1,34 @@
+[
+  {
+    "taskId": "tests-3.8",
+    "name": "tests-3.8",
+    "cwd": "/test/project",
+    "description": "Run tests with Python 3.8",
+    "status": "idle",
+    "frameworkName": "nox",
+    "parameters": { "python": "3.8" },
+    "categoryGroups": ["tests"],
+    "matrixGroup": "tests",
+    "isDefault": true
+  },
+  {
+    "taskId": "lint",
+    "name": "lint", 
+    "cwd": "/test/project",
+    "description": "Run linting checks",
+    "status": "idle",
+    "frameworkName": "nox",
+    "categoryGroups": ["quality"],
+    "isDefault": true
+  },
+  {
+    "taskId": "docs",
+    "name": "docs",
+    "cwd": "/test/project", 
+    "description": "Build documentation",
+    "status": "idle",
+    "frameworkName": "nox",
+    "categoryGroups": ["docs"],
+    "isDefault": false
+  }
+]

@@ -1,0 +1,5 @@
+Invalid output format
+Missing session markers
+* incomplete line
+- another incomplete
+Random text without structure
