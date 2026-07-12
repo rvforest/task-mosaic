@@ -1,10 +1,4 @@
 {
   "version": "0.2",
-  "words": [
-    "mypackage",
-    "noxfile",
-    "onView",
-    "taskmosaic",
-    "tsparser"
-  ]
+  "words": ["mypackage", "noxfile", "onView", "taskmosaic", "tsparser"]
 }
