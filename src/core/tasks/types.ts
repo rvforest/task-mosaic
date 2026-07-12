@@ -1,14 +1,94 @@
-// Unified status type that covers both execution states and UI display states
-export type TaskStatus = "idle" | "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped";
+export type TaskKey = string;
+export type ProjectKey = string;
+export type FrameworkId = string;
+
+export type TaskStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export interface TaskProject {
+  key: ProjectKey;
+  frameworkId: FrameworkId;
+  workspaceUri: string;
+  workspaceName: string;
+  rootUri: string;
+  rootPath: string;
+  relativePath: string;
+  configurationUri: string;
+}
 
 export interface Task {
-  taskId: string; // unique key, e.g. "tests-3.11"
-  name: string; // display label
-  cwd: string; // working directory to run task in, e.g. "/path/to/project"
-  description?: string; // optional description for the task
-  frameworkName: string; // e.g. "nox", "tox"
-  parameters?: Record<string, string>; // key-value pairs for task parameters
-  categoryGroups?: string[]; // groups for categorization, e.g. ["tests", "lint"]
-  matrixGroup?: string | null; // parent group name for matrix tasks, e.g. "test"
-  isDefault?: boolean;
+  key: TaskKey;
+  frameworkTaskId: string;
+  frameworkId: FrameworkId;
+  projectKey: ProjectKey;
+  label: string;
+  description?: string;
+  tags: string[];
+  matrixGroup?: string;
+  parameters: Record<string, string>;
+  isDefault: boolean;
+}
+
+export interface TaskRunOptions {
+  runnerArgs?: string[];
+  taskArgs?: string[];
+}
+
+export interface TaskRunResult {
+  taskKey: TaskKey;
+  status: Exclude<TaskStatus, "idle" | "queued" | "running">;
+  exitCode?: number;
+  startTime: Date;
+  endTime: Date;
+  durationMs: number;
+  reason?: string;
+}
+
+export interface ProjectDiscoveryResult {
+  project: TaskProject;
+  tasks?: Task[];
+  error?: DiscoveryError;
+}
+
+export type DiscoveryErrorCode =
+  | "missingExecutable"
+  | "unsupportedVersion"
+  | "invalidConfiguration"
+  | "malformedOutput"
+  | "timeout"
+  | "outputLimit"
+  | "unknown";
+
+export interface DiscoveryError {
+  code: DiscoveryErrorCode;
+  message: string;
+  detail?: string;
+}
+
+export interface DiscoveryState {
+  phase: "idle" | "loading" | "ready" | "untrusted";
+  projects: TaskProject[];
+  errors: Map<ProjectKey, DiscoveryError>;
+  truncated: boolean;
+}
+
+export function createProjectKey(
+  frameworkId: FrameworkId,
+  workspaceUri: string,
+  relativePath: string,
+): ProjectKey {
+  return JSON.stringify([frameworkId, workspaceUri, relativePath]);
+}
+
+export function createTaskKey(
+  projectKey: ProjectKey,
+  frameworkTaskId: string,
+): TaskKey {
+  return JSON.stringify([projectKey, frameworkTaskId]);
 }
