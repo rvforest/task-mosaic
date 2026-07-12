@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import * as fs from "fs";
+import { parseArgsStringToArgv } from "string-argv";
 import { promisify } from "util";
 
 import { TaskSourceDiscoveryError } from "../../core/task-source/errors";
@@ -68,6 +69,13 @@ export class NoxTaskSource implements TaskSource {
     patterns: ["**/noxfile.py"],
   } as const;
   readonly trust = { discovery: true, execution: true };
+  readonly invocationInput = {
+    prompt: "Enter arguments for the Nox session",
+    placeHolder: "Example: --coverage 'tests with spaces'",
+    parse: (input: string): TaskInvocation => ({
+      inputs: { taskArgs: parseArgsStringToArgv(input) },
+    }),
+  };
 
   private readonly executeCommand: CommandExecutor;
   private readonly getConfig: NoxConfigProvider;

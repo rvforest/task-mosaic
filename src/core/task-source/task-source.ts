@@ -57,11 +57,18 @@ export interface ExecutionPreparation {
   createArtifactPath(name: string): string;
 }
 
+export interface InvocationInputAdapter {
+  prompt: string;
+  placeHolder?: string;
+  parse(input: string): TaskInvocation;
+}
+
 export interface TaskSource {
   readonly id: TaskSourceId;
   readonly displayName: string;
   readonly projectDiscovery: ProjectDiscoveryStrategy;
   readonly trust: SourceTrustRequirements;
+  readonly invocationInput?: InvocationInputAdapter;
 
   discover(project: TaskProject): Promise<DiscoveredTask[]>;
 

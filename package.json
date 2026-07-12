@@ -4,9 +4,26 @@
   "description": "Discover and run tasks from languages, frameworks, and task sources.",
   "version": "0.1.0",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rvforest/task-mosaic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rvforest/task-mosaic/issues"
+  },
   "engines": {
     "vscode": "^1.101.0"
   },
+  "categories": [
+    "Other",
+    "Testing"
+  ],
+  "keywords": [
+    "tasks",
+    "nox",
+    "python",
+    "automation"
+  ],
   "main": "./out/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {
@@ -20,6 +37,23 @@
     }
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "taskMosaic",
+          "title": "TaskMosaic",
+          "icon": "resources/task-mosaic-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "taskMosaic": [
+        {
+          "id": "taskMosaic",
+          "name": "Tasks"
+        }
+      ]
+    },
     "taskDefinitions": [
       {
         "type": "taskMosaic",
@@ -49,6 +83,105 @@
         }
       }
     ],
+    "commands": [
+      {
+        "command": "taskMosaic.refreshTasks",
+        "title": "TaskMosaic: Refresh Tasks",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "taskMosaic.selectViewMode",
+        "title": "TaskMosaic: Select Grouping",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "taskMosaic.runTask",
+        "title": "TaskMosaic: Run Task",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskMosaic.runTaskWithArgs",
+        "title": "TaskMosaic: Run Task with Input"
+      },
+      {
+        "command": "taskMosaic.runGroup",
+        "title": "TaskMosaic: Run Group",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "taskMosaic.runGroupWithArgs",
+        "title": "TaskMosaic: Run Group with Input"
+      },
+      {
+        "command": "taskMosaic.runAllDefaultTasks",
+        "title": "TaskMosaic: Run All Default Tasks",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "taskMosaic.cancelTask",
+        "title": "TaskMosaic: Cancel Task",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskMosaic.cancelAll",
+        "title": "TaskMosaic: Cancel All Group Tasks",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskMosaic.showOutput",
+        "title": "TaskMosaic: Show Output"
+      },
+      {
+        "command": "taskMosaic.configureNox",
+        "title": "TaskMosaic: Configure Nox"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "taskMosaic.runAllDefaultTasks",
+          "when": "view == taskMosaic",
+          "group": "navigation@1"
+        },
+        {
+          "command": "taskMosaic.selectViewMode",
+          "when": "view == taskMosaic",
+          "group": "navigation@2"
+        },
+        {
+          "command": "taskMosaic.refreshTasks",
+          "when": "view == taskMosaic",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "taskMosaic.runTask",
+          "when": "view == taskMosaic && viewItem == task",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.cancelTask",
+          "when": "view == taskMosaic && viewItem == runningTask",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.runGroup",
+          "when": "view == taskMosaic && viewItem == group",
+          "group": "inline"
+        },
+        {
+          "command": "taskMosaic.runTaskWithArgs",
+          "when": "view == taskMosaic && viewItem == task",
+          "group": "1_run@1"
+        },
+        {
+          "command": "taskMosaic.runGroupWithArgs",
+          "when": "view == taskMosaic && viewItem == group",
+          "group": "1_run@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "TaskMosaic",
       "properties": {
@@ -108,6 +241,14 @@
           "default": true,
           "scope": "window",
           "description": "Automatically refresh when workspace task configuration changes."
+        },
+        "taskMosaic.execution.maxConcurrent": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 16,
+          "scope": "window",
+          "description": "Maximum number of concurrent tasks started by a TaskMosaic group run."
         }
       }
     }
@@ -115,7 +256,9 @@
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm test",
     "compile": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package": "npm run clean && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
     "lint": "eslint src test --ext ts",
     "test": "jest --coverage --runInBand",
     "watch": "tsc --watch -p tsconfig.json"
