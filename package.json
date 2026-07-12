@@ -1,149 +1,161 @@
 {
   "name": "taskmosaic",
   "displayName": "TaskMosaic",
-  "description": "Browse and run tasks from multiple frameworks.",
-  "version": "0.0.1",
+  "description": "Discover and run tasks from multiple automation frameworks.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.101.0"
   },
-  "categories": [
-    "Other"
-  ],
-  "main": "./out/src/extension.js",
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "taskMosaic",
-          "title": "TaskMosaic",
-          "icon": "$(beaker)"
-        }
-      ]
-    },
-    "views": {
-      "taskMosaic": [
-        {
-          "id": "taskMosaic",
-          "name": "TaskMosaic",
-          "icon": "play"
-        }
-      ]
-    },
-    "commands": [
-      {
-        "command": "taskMosaic.refreshTasks",
-        "title": "Refresh Tasks",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "taskMosaic.toggleViewMode",
-        "title": "Toggle View Mode",
-        "icon": "$(list-tree)"
-      },
-      {
-        "command": "taskMosaic.runTask",
-        "title": "Run Task",
-        "icon": "$(play)"
-      },
-      {
-        "command": "taskMosaic.runParentTask",
-        "title": "Run All",
-        "icon": "$(play)"
-      },
-      {
-        "command": "taskMosaic.runTagGroup",
-        "title": "Run All Tasks in Tag Group",
-        "icon": "$(play-circle)"
-      },
-      {
-        "command": "taskMosaic.runAllDefaultTasks",
-        "title": "Run All Default Tasks",
-        "icon": "$(play-circle)"
-      },
-      {
-        "command": "taskMosaic.runTaskWithArgs",
-        "title": "Run with Arguments"
-      },
-      {
-        "command": "taskMosaic.runParentTaskWithArgs",
-        "title": "Run All with Arguments"
-      },
-      {
-        "command": "taskMosaic.runTaskVerbose",
-        "title": "Run with Verbose Output"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "taskMosaic.runAllDefaultTasks",
-          "when": "view == taskMosaic",
-          "group": "navigation"
-        },
-        {
-          "command": "taskMosaic.toggleViewMode",
-          "when": "view == taskMosaic",
-          "group": "navigation"
-        },
-        {
-          "command": "taskMosaic.refreshTasks",
-          "when": "view == taskMosaic",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "taskMosaic.runTagGroup",
-          "when": "view == taskMosaic && viewItem == categoryGroup",
-          "group": "inline"
-        },
-        {
-          "command": "taskMosaic.runTask",
-          "when": "view == taskMosaic && viewItem == task",
-          "group": "inline"
-        },
-        {
-          "command": "taskMosaic.runParentTask",
-          "when": "view == taskMosaic && viewItem == matrixGroup",
-          "group": "inline"
-        },
-        {
-          "command": "taskMosaic.runTaskWithArgs",
-          "when": "view == taskMosaic && viewItem == task",
-          "group": "1_run@2"
-        },
-        {
-          "command": "taskMosaic.runTaskVerbose",
-          "when": "view == taskMosaic && viewItem == task",
-          "group": "1_run@3"
-        },
-        {
-          "command": "taskMosaic.runParentTaskWithArgs",
-          "when": "view == taskMosaic && viewItem == matrixGroup",
-          "group": "1_run@2"
-        }
+  "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "TaskMosaic waits for Workspace Trust before loading task configuration or running commands.",
+      "restrictedConfigurations": [
+        "taskMosaic.nox.command",
+        "taskMosaic.nox.commandArgs",
+        "taskMosaic.nox.runnerArgs"
       ]
     }
   },
+  "contributes": {
+    "taskDefinitions": [
+      {
+        "type": "taskMosaic",
+        "required": [
+          "framework",
+          "project",
+          "task"
+        ],
+        "properties": {
+          "framework": {
+            "type": "string",
+            "description": "Task framework identifier."
+          },
+          "project": {
+            "type": "string",
+            "description": "Workspace-relative task project path."
+          },
+          "task": {
+            "type": "string",
+            "description": "Framework task identifier."
+          },
+          "runnerArgs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments passed to the task runner."
+          },
+          "taskArgs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments passed to the selected task."
+          }
+        }
+      }
+    ],
+    "configuration": {
+      "title": "TaskMosaic",
+      "properties": {
+        "taskMosaic.nox.command": {
+          "type": "string",
+          "default": "nox",
+          "scope": "resource",
+          "description": "Executable used to invoke Nox."
+        },
+        "taskMosaic.nox.commandArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Arguments inserted immediately after the configured executable, such as ['run', 'nox'] when the command is uv."
+        },
+        "taskMosaic.nox.runnerArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Default Nox arguments used for task execution."
+        },
+        "taskMosaic.discovery.include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/noxfile.py"
+          ],
+          "scope": "window",
+          "description": "Glob patterns used to find task project configuration files."
+        },
+        "taskMosaic.discovery.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/.git/**",
+            "**/.hg/**",
+            "**/.svn/**",
+            "**/node_modules/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/.nox/**",
+            "**/build/**",
+            "**/dist/**"
+          ],
+          "scope": "window",
+          "description": "Glob patterns excluded from project discovery."
+        },
+        "taskMosaic.discovery.maxProjects": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 500,
+          "scope": "window",
+          "description": "Maximum number of task projects discovered in a workspace."
+        },
+        "taskMosaic.discovery.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Automatically refresh when workspace task configuration changes."
+        }
+      }
+    }
+  },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "lint": "eslint src --ext ts",
-    "test": "jest --coverage",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "compile": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test --ext ts",
+    "test": "jest --coverage --runInBand",
+    "watch": "tsc --watch -p tsconfig.json"
+  },
+  "dependencies": {
+    "string-argv": "^0.3.2"
   },
   "devDependencies": {
+    "@swc/core": "^1.12.9",
+    "@swc/jest": "^0.2.38",
     "@types/jest": "^30.0.0",
-    "@types/node": "^14.0.0",
-    "@types/vscode": "^1.70.0",
+    "@types/node": "^20.19.1",
+    "@types/vscode": "^1.101.0",
     "@typescript-eslint/eslint-plugin": "^8.34.0",
     "@typescript-eslint/parser": "^8.34.0",
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.5",
     "eslint": "^9.29.0",
     "jest": "^30.0.5",
     "prettier": "^3.6.0",
-    "ts-jest": "^29.4.1",
-    "typescript": "^4.9.5"
+    "typescript": "^5.8.3"
   }
 }

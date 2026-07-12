@@ -1,127 +1,171 @@
+import { FrameworkDiscoveryError } from "../../../src/core/framework/errors";
+import { FrameworkCommandConfig } from "../../../src/core/framework/framework";
 import { NoxFramework } from "../../../src/frameworks/nox/nox-framework";
-import { NoxTaskProvider } from "../../../src/frameworks/nox/nox-task-provider";
-import { NoxTaskRunner } from "../../../src/frameworks/nox/nox-task-runner";
-import { OutputChannel } from "../../../src/core/types";
+import { project } from "../../helpers";
 
-// Mock the Nox provider and runner
-jest.mock("../../../src/frameworks/nox/nox-task-provider");
-jest.mock("../../../src/frameworks/nox/nox-task-runner");
-
-const MockNoxTaskProvider = NoxTaskProvider as jest.MockedClass<typeof NoxTaskProvider>;
-const MockNoxTaskRunner = NoxTaskRunner as jest.MockedClass<typeof NoxTaskRunner>;
-
-// Mock OutputChannel
-const mockOutputChannel: OutputChannel = {
-  append: jest.fn(),
-  appendLine: jest.fn()
+const config: FrameworkCommandConfig = {
+  command: "nox",
+  commandArgs: [],
+  runnerArgs: [],
 };
 
+const defaults = [
+  {
+    session: "tests-3.12",
+    name: "tests",
+    description: "Run tests",
+    python: "3.12",
+    tags: ["test", "ci"],
+    call_spec: {},
+  },
+];
+
+const all = [
+  ...defaults,
+  {
+    session: "docs",
+    name: "docs",
+    description: "Build docs",
+    python: null,
+    tags: ["docs"],
+    call_spec: {},
+  },
+  {
+    session: "test-3.12(kind='unit')",
+    name: "test",
+    description: "Parameterized test",
+    python: "3.12",
+    tags: ["test"],
+    call_spec: { kind: "unit" },
+  },
+];
+
 describe("NoxFramework", () => {
-  let framework: NoxFramework;
-  let mockProvider: jest.Mocked<NoxTaskProvider>;
-  let mockRunner: jest.Mocked<NoxTaskRunner>;
+  it("discovers all sessions and reconciles defaults", async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce({ stdout: "2026.4.10\n" })
+      .mockResolvedValueOnce({ stdout: JSON.stringify(defaults) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify(all) });
+    const framework = new NoxFramework(execute);
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    
-    // Setup mocked instances
-    mockProvider = new MockNoxTaskProvider(mockOutputChannel) as jest.Mocked<NoxTaskProvider>;
-    mockRunner = new MockNoxTaskRunner(mockOutputChannel) as jest.Mocked<NoxTaskRunner>;
-    
-    // Configure mock constructor return values
-    MockNoxTaskProvider.mockImplementation(() => mockProvider);
-    MockNoxTaskRunner.mockImplementation(() => mockRunner);
-    
-    framework = new NoxFramework(mockOutputChannel);
+    const tasks = await framework.discover(project(), config);
+
+    expect(tasks).toHaveLength(3);
+    expect(
+      tasks.find((task) => task.frameworkTaskId === "tests-3.12")?.isDefault,
+    ).toBe(true);
+    expect(
+      tasks.find((task) => task.frameworkTaskId === "docs")?.isDefault,
+    ).toBe(false);
+    expect(tasks[2].matrixGroup).toBe("test");
+    expect(execute.mock.calls[2][1]).toEqual([
+      "--list-sessions",
+      "--json",
+      "-k",
+      "True",
+    ]);
   });
 
-  describe("initialization", () => {
-    it("should create with correct name", () => {
-      expect(framework.name).toBe("nox");
+  it("supports command prefixes", async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce({ stdout: "2026.4.10" })
+      .mockResolvedValueOnce({ stdout: "[]" })
+      .mockResolvedValueOnce({ stdout: "[]" });
+    const framework = new NoxFramework(execute);
+    await framework.discover(project(), {
+      command: "uv",
+      commandArgs: ["run", "nox"],
+      runnerArgs: [],
     });
-
-    it("should create NoxTaskProvider and NoxTaskRunner instances", () => {
-      expect(MockNoxTaskProvider).toHaveBeenCalledWith(mockOutputChannel);
-      expect(MockNoxTaskRunner).toHaveBeenCalledWith(mockOutputChannel);
-    });
+    expect(execute.mock.calls[0].slice(0, 2)).toEqual([
+      "uv",
+      ["run", "nox", "--version"],
+    ]);
   });
 
-  describe("getCommand method", () => {
-    it("should return 'nox'", () => {
-      expect(framework.getCommand()).toBe("nox");
-    });
-  });
-
-  describe("detectInDirectory method", () => {
-    beforeEach(() => {
-      // Reset the listTasks mock before each test
-      mockProvider.listTasks = jest.fn();
-    });
-
-    it("should return true when provider can list tasks successfully", async () => {
-      mockProvider.listTasks.mockResolvedValue([]);
-      
-      const result = await (framework as any).detectInDirectory("/valid/path");
-      
-      expect(result).toBe(true);
-      expect(mockProvider.listTasks).toHaveBeenCalledWith(["/valid/path"]);
-    });
-
-    it("should return false and log when ENOENT error occurs", async () => {
-      const error = new Error("Command not found");
-      (error as any).code = "ENOENT";
-      mockProvider.listTasks.mockRejectedValue(error);
-      
-      const result = await (framework as any).detectInDirectory("/invalid/path");
-      
-      expect(result).toBe(false);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
-        "Nox executable not found in /invalid/path."
-      );
-    });
-
-    it("should return false and log when other error occurs", async () => {
-      const error = new Error("Some other error");
-      mockProvider.listTasks.mockRejectedValue(error);
-      
-      const result = await (framework as any).detectInDirectory("/error/path");
-      
-      expect(result).toBe(false);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
-        "Nox not detected in /error/path: Some other error"
-      );
-    });
-
-    it("should handle non-Error exceptions", async () => {
-      mockProvider.listTasks.mockRejectedValue("String error");
-      
-      const result = await (framework as any).detectInDirectory("/error/path");
-      
-      expect(result).toBe(false);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
-        "Nox not detected in /error/path: String error"
-      );
-    });
-
-    it("should handle null/undefined exceptions", async () => {
-      mockProvider.listTasks.mockRejectedValue(null);
-      
-      const result = await (framework as any).detectInDirectory("/error/path");
-      
-      expect(result).toBe(false);
-      expect(mockOutputChannel.appendLine).toHaveBeenCalledWith(
-        "Nox not detected in /error/path: null"
-      );
+  it("rejects Nox versions before complete JSON selection support", async () => {
+    const framework = new NoxFramework(
+      jest.fn().mockResolvedValue({ stdout: "2025.11.12" }),
+    );
+    await expect(framework.discover(project(), config)).rejects.toMatchObject({
+      code: "unsupportedVersion",
     });
   });
 
-  describe("provider and runner access", () => {
-    it("should provide access to the NoxTaskProvider", () => {
-      expect(framework.provider).toBe(mockProvider);
-    });
+  it("rejects malformed session records", async () => {
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce({ stdout: "2026.4.10" })
+      .mockResolvedValueOnce({ stdout: "[]" })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([{ session: "bad" }]) });
+    await expect(
+      new NoxFramework(execute).discover(project(), config),
+    ).rejects.toBeInstanceOf(FrameworkDiscoveryError);
+  });
 
-    it("should provide access to the NoxTaskRunner", () => {
-      expect(framework.runner).toBe(mockRunner);
+  it("creates a process execution specification without shell joining", () => {
+    const framework = new NoxFramework();
+    const taskProject = project();
+    const discovered = {
+      key: "key",
+      frameworkTaskId: "tests-3.12",
+      frameworkId: "nox",
+      projectKey: taskProject.key,
+      label: "tests-3.12",
+      tags: [],
+      parameters: {},
+      isDefault: true,
+    };
+    const spec = framework.createExecution(
+      discovered,
+      taskProject,
+      { runnerArgs: ["-v"], taskArgs: ["path with spaces"] },
+      {
+        command: "uv",
+        commandArgs: ["run", "nox"],
+        runnerArgs: ["--reuse-venv=yes"],
+      },
+      "/tmp/report.json",
+    );
+    expect(spec).toEqual({
+      command: "uv",
+      cwd: "/workspace",
+      args: [
+        "run",
+        "nox",
+        "--reuse-venv=yes",
+        "-v",
+        "--report",
+        "/tmp/report.json",
+        "-s",
+        "tests-3.12",
+        "--",
+        "path with spaces",
+      ],
     });
+  });
+
+  it("interprets structured success and skipped reports", async () => {
+    const directory = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "taskmosaic-"),
+    );
+    const reportPath = path.join(directory, "report.json");
+    const framework = new NoxFramework();
+    try {
+      await fs.promises.writeFile(
+        reportPath,
+        JSON.stringify({ sessions: [{ result: "skipped" }] }),
+      );
+      await expect(
+        framework.interpretResult(reportPath, new Date(Date.now() - 1000)),
+      ).resolves.toEqual({ status: "skipped" });
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
   });
 });
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";

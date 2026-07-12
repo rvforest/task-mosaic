@@ -1,1 +1,0 @@
-No sessions defined in /path/to/project/noxfile.py.

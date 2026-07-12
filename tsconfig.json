@@ -1,23 +1,18 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "target": "es2020",
+    "target": "es2022",
     "outDir": "out",
-    "lib": [
-      "es2020"
-    ],
+    "lib": ["es2022"],
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "declaration": true,
     "moduleResolution": "node",
     "forceConsistentCasingInFileNames": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": [
-    "src",
-    "test/**/*"
-  ]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "out", "dist", "test"]
 }
