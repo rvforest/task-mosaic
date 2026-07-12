@@ -1,0 +1,10 @@
+{
+  "name": "taskmosaic-test-runner",
+  "displayName": "TaskMosaic Test Runner",
+  "publisher": "taskmosaic-tests",
+  "version": "0.0.0",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "main": "./extension.js"
+}
