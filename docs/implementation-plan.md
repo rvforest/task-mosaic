@@ -97,14 +97,14 @@ the VS Code Task API.
 | `taskMosaic.nox.command`             | `"nox"`                                                                         |
 | `taskMosaic.nox.commandArgs`         | `[]`                                                                            |
 | `taskMosaic.nox.runnerArgs`          | `[]`                                                                            |
-| `taskMosaic.discovery.include`       | `["**/noxfile.py"]`                                                             |
 | `taskMosaic.discovery.exclude`       | Common VCS, environment, dependency, cache, build, and distribution directories |
 | `taskMosaic.discovery.maxProjects`   | `50`, range `1-500`                                                             |
 | `taskMosaic.discovery.autoRefresh`   | `true`                                                                          |
 | `taskMosaic.execution.maxConcurrent` | `3`, range `1-16`                                                               |
 
 The Nox settings belong to the Nox source. A future source contributes its own
-configuration without adding cases to a central configuration provider.
+configuration and project-location patterns without adding cases to a central
+configuration provider or discovery setting.
 
 ## Delivery Stages
 
@@ -126,8 +126,8 @@ Track the assessment and this implementation plan before runtime work.
 ### 2. Identity, projects, and refresh lifecycle
 
 - Use stable source, task, and project keys across multi-root workspaces.
-- Find Nox projects through configurable include/exclude globs while keeping
-  discovery strategy source-owned.
+- Find configuration-backed projects through patterns declared by each source,
+  with shared exclusion and project-limit safeguards.
 - Debounce and coalesce file, workspace, trust, and setting refresh events.
 - Replace results atomically per project and preserve unaffected projects on
   errors.

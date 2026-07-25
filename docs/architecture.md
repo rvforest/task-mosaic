@@ -13,6 +13,10 @@ whether discovery requires Workspace Trust, and how discovered records become
 portable tasks. Configuration-file discovery is one strategy; a source may
 instead operate at workspace scope or use an external API.
 
+Configuration-file names and patterns belong to the source declaration. The
+workspace coordinator applies shared exclusions and limits, but it does not
+carry a built-in list of Nox or other framework files.
+
 Internal task identity includes source, workspace, project scope, and the
 source's task ID. Display labels and group names are never identifiers. Generic
 group memberships describe relationships such as tags, matrices, build groups,
