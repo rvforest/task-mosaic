@@ -51,5 +51,11 @@ module.exports = {
       functions: 40,
       lines: 40,
     },
+    "./src/vscode/run-coordinator.ts": {
+      statements: 60,
+      branches: 40,
+      functions: 70,
+      lines: 60,
+    },
   },
 };
