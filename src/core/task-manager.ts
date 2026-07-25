@@ -1,18 +1,19 @@
 import {
   DiscoveryError,
   DiscoveryState,
+  DiscoveredTask,
   ProjectDiscoveryResult,
   ProjectKey,
-  Task,
   TaskKey,
   TaskProject,
+  TaskSourceId,
   TaskStatus,
 } from "./tasks/types";
 
 type Listener = () => void;
 
 export class TaskManager {
-  private tasks = new Map<TaskKey, Task>();
+  private tasks = new Map<TaskKey, DiscoveredTask>();
   private projects = new Map<ProjectKey, TaskProject>();
   private errors = new Map<ProjectKey, DiscoveryError>();
   private statuses = new Map<TaskKey, TaskStatus>();
@@ -59,7 +60,7 @@ export class TaskManager {
 
     for (const result of results) {
       this.projects.set(result.project.key, result.project);
-      if (result.error) {
+      if ("error" in result) {
         this.errors.set(result.project.key, result.error);
         continue;
       }
@@ -97,7 +98,7 @@ export class TaskManager {
     };
   }
 
-  getTask(key: TaskKey): Task | undefined {
+  getTask(key: TaskKey): DiscoveredTask | undefined {
     return this.tasks.get(key);
   }
 
@@ -105,11 +106,11 @@ export class TaskManager {
     return this.projects.get(key);
   }
 
-  getAllTasks(): Task[] {
+  getAllTasks(): DiscoveredTask[] {
     return [...this.tasks.values()];
   }
 
-  getTasksForProject(projectKey: ProjectKey): Task[] {
+  getTasksForProject(projectKey: ProjectKey): DiscoveredTask[] {
     return this.getAllTasks().filter((task) => task.projectKey === projectKey);
   }
 
@@ -125,22 +126,24 @@ export class TaskManager {
   findTasks(criteria: {
     workspaceUri?: string;
     projectKey?: ProjectKey;
-    frameworkId?: string;
-    tag?: string;
-    matrixGroup?: string;
-    isDefault?: boolean;
-  }): Task[] {
+    sourceId?: TaskSourceId;
+    group?: { kind: string; id: string };
+    role?: string;
+  }): DiscoveredTask[] {
     return this.getAllTasks().filter((task) => {
       const project = this.projects.get(task.projectKey);
       return (
         (!criteria.workspaceUri ||
           project?.workspaceUri === criteria.workspaceUri) &&
         (!criteria.projectKey || task.projectKey === criteria.projectKey) &&
-        (!criteria.frameworkId || task.frameworkId === criteria.frameworkId) &&
-        (!criteria.tag || task.tags.includes(criteria.tag)) &&
-        (!criteria.matrixGroup || task.matrixGroup === criteria.matrixGroup) &&
-        (criteria.isDefault === undefined ||
-          task.isDefault === criteria.isDefault)
+        (!criteria.sourceId || task.sourceId === criteria.sourceId) &&
+        (!criteria.group ||
+          task.groups.some(
+            (group) =>
+              group.kind === criteria.group?.kind &&
+              group.id === criteria.group.id,
+          )) &&
+        (!criteria.role || task.roles.includes(criteria.role))
       );
     });
   }

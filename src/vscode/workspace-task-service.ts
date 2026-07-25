@@ -1,16 +1,16 @@
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { FrameworkDiscoveryError } from "../core/framework/errors";
-import { FrameworkAdapter } from "../core/framework/framework";
-import { FrameworkRegistry } from "../core/framework/framework-registry";
 import { TaskManager } from "../core/task-manager";
+import { TaskSourceDiscoveryError } from "../core/task-source/errors";
+import { TaskSource } from "../core/task-source/task-source";
+import { TaskSourceRegistry } from "../core/task-source/task-source-registry";
 import {
   createProjectKey,
   ProjectDiscoveryResult,
   TaskProject,
 } from "../core/tasks/types";
-import { getDiscoveryConfig, getFrameworkConfig } from "./configuration";
+import { getDiscoveryConfig } from "./configuration";
 
 const REFRESH_DEBOUNCE_MS = 300;
 const DISCOVERY_CONCURRENCY = 4;
@@ -25,7 +25,7 @@ export class WorkspaceTaskService implements vscode.Disposable {
 
   constructor(
     private readonly taskManager: TaskManager,
-    private readonly registry: FrameworkRegistry,
+    private readonly registry: TaskSourceRegistry,
     private readonly output: vscode.OutputChannel,
   ) {
     this.disposables.push(
@@ -91,13 +91,20 @@ export class WorkspaceTaskService implements vscode.Disposable {
   }
 
   private async refreshOnce(): Promise<void> {
-    if (!vscode.workspace.isTrusted) {
+    const availableSources = this.registry
+      .getAll()
+      .filter(
+        (source) =>
+          vscode.workspace.isTrusted || !source.trust.discovery,
+      );
+    if (availableSources.length === 0 && !vscode.workspace.isTrusted) {
       this.taskManager.setUntrusted();
       return;
     }
 
     this.taskManager.setLoading();
-    const { projects, truncated } = await this.findProjects();
+    const { projects, truncated } =
+      await this.findProjects(availableSources);
     const results = await this.mapWithConcurrency(
       projects,
       DISCOVERY_CONCURRENCY,
@@ -110,96 +117,123 @@ export class WorkspaceTaskService implements vscode.Disposable {
     );
   }
 
-  private async findProjects(): Promise<{
-    projects: TaskProject[];
-    truncated: boolean;
-  }> {
+  private async findProjects(
+    sources: TaskSource[],
+  ): Promise<{ projects: TaskProject[]; truncated: boolean }> {
     const config = getDiscoveryConfig();
     const exclude = this.combineGlobs(config.exclude);
-    const found = new Map<string, vscode.Uri>();
+    const projects = new Map<string, TaskProject>();
 
-    for (const include of config.include) {
-      const uris = await vscode.workspace.findFiles(
-        include,
-        exclude,
-        config.maxProjects + 1,
-      );
-      for (const uri of uris) {
-        found.set(uri.toString(), uri);
+    for (const source of sources) {
+      if (source.projectDiscovery.kind === "workspace") {
+        for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+          const project = this.workspaceProject(source, workspaceFolder);
+          projects.set(project.key, project);
+        }
       }
     }
 
-    const sorted = [...found.values()].sort((left, right) =>
-      left.toString().localeCompare(right.toString()),
+    for (const source of sources) {
+      if (source.projectDiscovery.kind === "configurationFiles") {
+        for (const pattern of source.projectDiscovery.patterns) {
+          const uris = await vscode.workspace.findFiles(
+            pattern,
+            exclude,
+            config.maxProjects + 1,
+          );
+          for (const configurationUri of uris) {
+            const project = this.configurationProject(
+              source,
+              configurationUri,
+            );
+            if (project) {
+              projects.set(project.key, project);
+            }
+          }
+        }
+      }
+    }
+
+    const sorted = [...projects.values()].sort((left, right) =>
+      left.key.localeCompare(right.key),
     );
-    const truncated = sorted.length > config.maxProjects;
-    const selected = sorted.slice(0, config.maxProjects);
-    const projects: TaskProject[] = [];
+    return {
+      projects: sorted.slice(0, config.maxProjects),
+      truncated: sorted.length > config.maxProjects,
+    };
+  }
 
-    for (const configurationUri of selected) {
-      const workspaceFolder =
-        vscode.workspace.getWorkspaceFolder(configurationUri);
-      if (!workspaceFolder) {
-        continue;
-      }
-      const framework = this.frameworkForConfiguration(configurationUri);
-      if (!framework) {
-        continue;
-      }
-      const rootUri = vscode.Uri.file(path.dirname(configurationUri.fsPath));
-      const relative = path.relative(
-        workspaceFolder.uri.fsPath,
-        rootUri.fsPath,
-      );
-      const relativePath =
-        relative === "" ? "." : relative.split(path.sep).join("/");
-      projects.push({
-        key: createProjectKey(
-          framework.id,
-          workspaceFolder.uri.toString(),
-          relativePath,
-        ),
-        frameworkId: framework.id,
-        workspaceUri: workspaceFolder.uri.toString(),
-        workspaceName: workspaceFolder.name,
-        rootUri: rootUri.toString(),
-        rootPath: rootUri.fsPath,
-        relativePath,
-        configurationUri: configurationUri.toString(),
-      });
+  private workspaceProject(
+    source: TaskSource,
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): TaskProject {
+    return {
+      key: createProjectKey(source.id, workspaceFolder.uri.toString(), "."),
+      sourceId: source.id,
+      workspaceUri: workspaceFolder.uri.toString(),
+      workspaceName: workspaceFolder.name,
+      rootUri: workspaceFolder.uri.toString(),
+      rootPath: workspaceFolder.uri.fsPath,
+      relativePath: ".",
+    };
+  }
+
+  private configurationProject(
+    source: TaskSource,
+    configurationUri: vscode.Uri,
+  ): TaskProject | undefined {
+    const workspaceFolder =
+      vscode.workspace.getWorkspaceFolder(configurationUri);
+    if (!workspaceFolder) {
+      return undefined;
     }
-
-    return { projects, truncated };
+    const rootUri = configurationUri.with({
+      path: path.posix.dirname(configurationUri.path),
+    });
+    const relative = path.relative(
+      workspaceFolder.uri.fsPath,
+      rootUri.fsPath,
+    );
+    const relativePath =
+      relative === "" ? "." : relative.split(path.sep).join("/");
+    return {
+      key: createProjectKey(
+        source.id,
+        workspaceFolder.uri.toString(),
+        relativePath,
+      ),
+      sourceId: source.id,
+      workspaceUri: workspaceFolder.uri.toString(),
+      workspaceName: workspaceFolder.name,
+      rootUri: rootUri.toString(),
+      rootPath: rootUri.fsPath,
+      relativePath,
+      configurationUri: configurationUri.toString(),
+    };
   }
 
   private async discoverProject(
     project: TaskProject,
   ): Promise<ProjectDiscoveryResult> {
-    const framework = this.registry.get(project.frameworkId);
-    if (!framework) {
+    const source = this.registry.get(project.sourceId);
+    if (!source) {
       return {
         project,
         error: {
           code: "unknown",
-          message: `Framework '${project.frameworkId}' is not registered.`,
+          message: `Task source '${project.sourceId}' is not registered.`,
         },
       };
     }
     try {
-      const tasks = await framework.discover(
-        project,
-        getFrameworkConfig(
-          project.frameworkId,
-          vscode.Uri.parse(project.rootUri),
-        ),
-      );
+      const tasks = await source.discover(project);
       this.output.appendLine(
-        `[${framework.id}] Discovered ${tasks.length} task(s) in ${project.rootPath}`,
+        `[${source.id}] Discovered ${tasks.length} task(s) in ${project.rootPath}`,
       );
       return { project, tasks };
     } catch (error: unknown) {
       const discoveryError =
-        error instanceof FrameworkDiscoveryError
+        error instanceof TaskSourceDiscoveryError
           ? {
               code: error.code,
               message: error.message,
@@ -211,7 +245,7 @@ export class WorkspaceTaskService implements vscode.Disposable {
               detail: error instanceof Error ? error.message : String(error),
             };
       this.output.appendLine(
-        `[${framework.id}] ${project.rootPath}: ${discoveryError.message}`,
+        `[${source.id}] ${project.rootPath}: ${discoveryError.message}`,
       );
       if (discoveryError.detail) {
         this.output.appendLine(discoveryError.detail);
@@ -220,25 +254,20 @@ export class WorkspaceTaskService implements vscode.Disposable {
     }
   }
 
-  private frameworkForConfiguration(
-    configurationUri: vscode.Uri,
-  ): FrameworkAdapter | undefined {
-    const fileName = path.basename(configurationUri.fsPath);
-    return this.registry
-      .getAll()
-      .find((framework) => framework.configurationFileNames.includes(fileName));
-  }
-
   private recreateWatchers(): void {
     this.disposeWatchers();
-    for (const include of getDiscoveryConfig().include) {
-      const watcher = vscode.workspace.createFileSystemWatcher(include);
-      this.watchers.push(
-        watcher,
-        watcher.onDidCreate(() => this.scheduleRefresh()),
-        watcher.onDidChange(() => this.scheduleRefresh()),
-        watcher.onDidDelete(() => this.scheduleRefresh()),
-      );
+    for (const source of this.registry.getAll()) {
+      if (source.projectDiscovery.kind === "configurationFiles") {
+        for (const pattern of source.projectDiscovery.patterns) {
+          const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+          this.watchers.push(
+            watcher,
+            watcher.onDidCreate(() => this.scheduleRefresh()),
+            watcher.onDidChange(() => this.scheduleRefresh()),
+            watcher.onDidDelete(() => this.scheduleRefresh()),
+          );
+        }
+      }
     }
   }
 

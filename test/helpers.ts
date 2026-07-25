@@ -1,19 +1,20 @@
 import {
   createProjectKey,
   createTaskKey,
-  Task,
+  DiscoveredTask,
   TaskProject,
+  taskSourceId,
 } from "../src/core/tasks/types";
 
 export function project(overrides: Partial<TaskProject> = {}): TaskProject {
   const workspaceUri = overrides.workspaceUri ?? "file:///workspace";
   const relativePath = overrides.relativePath ?? ".";
-  const frameworkId = overrides.frameworkId ?? "nox";
+  const sourceId = overrides.sourceId ?? taskSourceId("nox");
   const key =
-    overrides.key ?? createProjectKey(frameworkId, workspaceUri, relativePath);
+    overrides.key ?? createProjectKey(sourceId, workspaceUri, relativePath);
   return {
     key,
-    frameworkId,
+    sourceId,
     workspaceUri,
     workspaceName: "workspace",
     rootUri: "file:///workspace",
@@ -26,18 +27,22 @@ export function project(overrides: Partial<TaskProject> = {}): TaskProject {
 
 export function task(
   taskProject: TaskProject,
-  frameworkTaskId: string,
-  overrides: Partial<Task> = {},
-): Task {
+  sourceTaskId: string,
+  overrides: Partial<DiscoveredTask> = {},
+): DiscoveredTask {
   return {
-    key: createTaskKey(taskProject.key, frameworkTaskId),
-    frameworkTaskId,
-    frameworkId: taskProject.frameworkId,
+    key: createTaskKey(taskProject.key, sourceTaskId),
+    sourceTaskId,
+    sourceId: taskProject.sourceId,
     projectKey: taskProject.key,
-    label: frameworkTaskId,
-    tags: [],
-    parameters: {},
-    isDefault: false,
+    label: sourceTaskId,
+    groups: [],
+    roles: [],
+    capabilities: {
+      runnable: true,
+      cancellable: true,
+      acceptsInputs: false,
+    },
     ...overrides,
   };
 }

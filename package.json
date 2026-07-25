@@ -1,7 +1,7 @@
 {
   "name": "taskmosaic",
   "displayName": "TaskMosaic",
-  "description": "Discover and run tasks from multiple automation frameworks.",
+  "description": "Discover and run tasks from languages, frameworks, and task sources.",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "engines": {
@@ -24,14 +24,14 @@
       {
         "type": "taskMosaic",
         "required": [
-          "framework",
+          "source",
           "project",
           "task"
         ],
         "properties": {
-          "framework": {
+          "source": {
             "type": "string",
-            "description": "Task framework identifier."
+            "description": "Task source identifier."
           },
           "project": {
             "type": "string",
@@ -39,21 +39,12 @@
           },
           "task": {
             "type": "string",
-            "description": "Framework task identifier."
+            "description": "Source-owned task identifier."
           },
-          "runnerArgs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Arguments passed to the task runner."
-          },
-          "taskArgs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Arguments passed to the selected task."
+          "inputs": {
+            "type": "object",
+            "description": "Portable source-owned invocation inputs.",
+            "additionalProperties": true
           }
         }
       }
@@ -84,17 +75,6 @@
           "default": [],
           "scope": "resource",
           "description": "Default Nox arguments used for task execution."
-        },
-        "taskMosaic.discovery.include": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "**/noxfile.py"
-          ],
-          "scope": "window",
-          "description": "Glob patterns used to find task project configuration files."
         },
         "taskMosaic.discovery.exclude": {
           "type": "array",

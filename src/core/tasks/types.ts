@@ -1,6 +1,16 @@
-export type TaskKey = string;
-export type ProjectKey = string;
-export type FrameworkId = string;
+declare const taskKeyBrand: unique symbol;
+declare const projectKeyBrand: unique symbol;
+declare const taskSourceIdBrand: unique symbol;
+
+export type TaskKey = string & { readonly [taskKeyBrand]: true };
+export type ProjectKey = string & { readonly [projectKeyBrand]: true };
+export type TaskSourceId = string & { readonly [taskSourceIdBrand]: true };
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
 
 export type TaskStatus =
   | "idle"
@@ -13,31 +23,43 @@ export type TaskStatus =
 
 export interface TaskProject {
   key: ProjectKey;
-  frameworkId: FrameworkId;
+  sourceId: TaskSourceId;
   workspaceUri: string;
   workspaceName: string;
   rootUri: string;
   rootPath: string;
   relativePath: string;
-  configurationUri: string;
+  configurationUri?: string;
+  sourceData?: JsonObject;
 }
 
-export interface Task {
+export interface TaskGroupMembership {
+  kind: string;
+  id: string;
+  label: string;
+}
+
+export interface TaskCapabilities {
+  runnable: boolean;
+  cancellable: boolean;
+  acceptsInputs: boolean;
+}
+
+export interface DiscoveredTask {
   key: TaskKey;
-  frameworkTaskId: string;
-  frameworkId: FrameworkId;
+  sourceTaskId: string;
+  sourceId: TaskSourceId;
   projectKey: ProjectKey;
   label: string;
   description?: string;
-  tags: string[];
-  matrixGroup?: string;
-  parameters: Record<string, string>;
-  isDefault: boolean;
+  groups: TaskGroupMembership[];
+  roles: string[];
+  capabilities: TaskCapabilities;
+  sourceData?: JsonObject;
 }
 
-export interface TaskRunOptions {
-  runnerArgs?: string[];
-  taskArgs?: string[];
+export interface TaskInvocation {
+  inputs?: JsonObject;
 }
 
 export interface TaskRunResult {
@@ -50,11 +72,15 @@ export interface TaskRunResult {
   reason?: string;
 }
 
-export interface ProjectDiscoveryResult {
-  project: TaskProject;
-  tasks?: Task[];
-  error?: DiscoveryError;
-}
+export type ProjectDiscoveryResult =
+  | {
+      project: TaskProject;
+      tasks: DiscoveredTask[];
+    }
+  | {
+      project: TaskProject;
+      error: DiscoveryError;
+    };
 
 export type DiscoveryErrorCode =
   | "missingExecutable"
@@ -78,17 +104,21 @@ export interface DiscoveryState {
   truncated: boolean;
 }
 
+export function taskSourceId(value: string): TaskSourceId {
+  return value as TaskSourceId;
+}
+
 export function createProjectKey(
-  frameworkId: FrameworkId,
+  sourceId: TaskSourceId,
   workspaceUri: string,
   relativePath: string,
 ): ProjectKey {
-  return JSON.stringify([frameworkId, workspaceUri, relativePath]);
+  return JSON.stringify([sourceId, workspaceUri, relativePath]) as ProjectKey;
 }
 
 export function createTaskKey(
   projectKey: ProjectKey,
-  frameworkTaskId: string,
+  sourceTaskId: string,
 ): TaskKey {
-  return JSON.stringify([projectKey, frameworkTaskId]);
+  return JSON.stringify([projectKey, sourceTaskId]) as TaskKey;
 }

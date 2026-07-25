@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
 
-import { FrameworkRegistry } from "./core/framework/framework-registry";
 import { TaskManager } from "./core/task-manager";
-import { NoxFramework } from "./frameworks/nox/nox-framework";
+import { TaskSourceRegistry } from "./core/task-source/task-source-registry";
+import { NoxTaskSource } from "./frameworks/nox/nox-task-source";
+import { getNoxConfig } from "./vscode/configuration";
 import { NativeTaskService, TASK_TYPE } from "./vscode/native-task-service";
 import { WorkspaceTaskService } from "./vscode/workspace-task-service";
 
@@ -13,8 +14,13 @@ export async function activate(
   context.subscriptions.push(output);
   output.info("Activating TaskMosaic");
 
-  const registry = new FrameworkRegistry();
-  registry.register(new NoxFramework());
+  const registry = new TaskSourceRegistry();
+  registry.register(
+    new NoxTaskSource({
+      getConfig: (project) =>
+        getNoxConfig(vscode.Uri.parse(project.rootUri)),
+    }),
+  );
   context.subscriptions.push({ dispose: () => registry.clear() });
 
   const taskManager = new TaskManager();
