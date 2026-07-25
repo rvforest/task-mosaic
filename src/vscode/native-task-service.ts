@@ -2,101 +2,168 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
-import { FrameworkRegistry } from "../core/framework/framework-registry";
 import { TaskManager } from "../core/task-manager";
 import {
-  Task,
+  ExecutionOutcome,
+  ManagedExecutionPlan,
+} from "../core/task-source/task-source";
+import { TaskSourceRegistry } from "../core/task-source/task-source-registry";
+import {
+  DiscoveredTask,
+  JsonObject,
+  JsonValue,
+  TaskInvocation,
   TaskKey,
-  TaskRunOptions,
   TaskRunResult,
+  taskSourceId,
 } from "../core/tasks/types";
-import { getFrameworkConfig } from "./configuration";
+import { TaskRunTracker, TrackedTask } from "./task-run-tracker";
 
 export const TASK_TYPE = "taskMosaic";
 
 interface TaskMosaicDefinition extends vscode.TaskDefinition {
   type: typeof TASK_TYPE;
-  framework: string;
+  source: string;
   project: string;
   task: string;
-  runnerArgs?: string[];
-  taskArgs?: string[];
-  taskKey?: TaskKey;
-  runToken?: string;
-  reportPath?: string;
+  inputs?: JsonObject;
 }
 
-interface RunContext {
-  token: string;
-  task: Task;
-  reportPath: string;
-  startTime: Date;
-  execution?: vscode.TaskExecution;
-  processEventSeen: boolean;
-  cancelledRequested: boolean;
-  settled: boolean;
-  resolve: (result: TaskRunResult) => void;
-  promise: Promise<TaskRunResult>;
+class ManagedTaskTerminal implements vscode.Pseudoterminal {
+  private readonly writeEmitter = new vscode.EventEmitter<string>();
+  private readonly closeEmitter = new vscode.EventEmitter<number | void>();
+  private readonly controller = new AbortController();
+  private closed = false;
+
+  readonly onDidWrite = this.writeEmitter.event;
+  readonly onDidClose = this.closeEmitter.event;
+
+  constructor(
+    private readonly plan: ManagedExecutionPlan,
+    private readonly onCancel: () => void,
+    private readonly onOutcome: (outcome: ExecutionOutcome) => Promise<void>,
+    private readonly onError: (error: unknown) => Promise<void>,
+  ) {}
+
+  open(): void {
+    void this.run();
+  }
+
+  close(): void {
+    this.onCancel();
+    this.controller.abort();
+    this.finish();
+  }
+
+  private async run(): Promise<void> {
+    try {
+      const outcome = await this.plan.run({
+        signal: this.controller.signal,
+        write: (output) => this.writeEmitter.fire(output),
+      });
+      await this.onOutcome(outcome);
+      this.finish(outcome.status === "failed" ? 1 : 0);
+    } catch (error: unknown) {
+      await this.onError(error);
+      this.finish(1);
+    }
+  }
+
+  private finish(exitCode?: number): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.closeEmitter.fire(exitCode);
+    this.writeEmitter.dispose();
+    this.closeEmitter.dispose();
+  }
 }
 
 export class NativeTaskService
   implements vscode.TaskProvider, vscode.Disposable
 {
   private readonly disposables: vscode.Disposable[] = [];
-  private readonly contexts = new Map<string, RunContext>();
-  private readonly activeByTask = new Map<TaskKey, RunContext>();
-  private readonly lastResults = new Map<TaskKey, TaskRunResult>();
+  private readonly preparedTasks = new WeakMap<vscode.Task, TrackedTask>();
+  private readonly tracker: TaskRunTracker;
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   private tokenCounter = 0;
-  private readonly reportsDirectory: string;
+  private readonly artifactsDirectory: string;
   readonly onDidChangeTasks = this.changeEmitter.event;
 
   constructor(
     private readonly taskManager: TaskManager,
-    private readonly registry: FrameworkRegistry,
+    private readonly registry: TaskSourceRegistry,
     storageUri: vscode.Uri,
     private readonly output: vscode.OutputChannel,
   ) {
-    this.reportsDirectory = path.join(storageUri.fsPath, "reports");
+    this.artifactsDirectory = path.join(storageUri.fsPath, "artifacts");
+    this.tracker = new TaskRunTracker(this.taskManager, this.output);
     const removeManagerListener = this.taskManager.onDidChange(() =>
       this.changeEmitter.fire(),
     );
     this.disposables.push(
       { dispose: removeManagerListener },
       this.changeEmitter,
-      vscode.tasks.onDidStartTask((event) => this.handleTaskStart(event)),
-      vscode.tasks.onDidEndTaskProcess((event) => {
-        void this.handleTaskProcessEnd(event);
+      vscode.tasks.onDidStartTask((event) => {
+        const tracked = this.preparedTasks.get(event.execution.task);
+        if (tracked) {
+          this.tracker.taskStarted(event, tracked);
+        }
       }),
-      vscode.tasks.onDidEndTask((event) => this.handleTaskEnd(event)),
+      vscode.tasks.onDidStartTaskProcess((event) =>
+        this.tracker.taskProcessStarted(event),
+      ),
+      vscode.tasks.onDidEndTaskProcess((event) => {
+        void this.tracker.taskProcessEnded(event);
+      }),
+      vscode.tasks.onDidEndTask((event) => this.tracker.taskEnded(event)),
     );
   }
 
   async initialize(): Promise<void> {
-    await fs.promises.rm(this.reportsDirectory, {
+    await fs.promises.rm(this.artifactsDirectory, {
       recursive: true,
       force: true,
     });
-    await fs.promises.mkdir(this.reportsDirectory, { recursive: true });
+    await fs.promises.mkdir(this.artifactsDirectory, { recursive: true });
   }
 
   provideTasks(): vscode.ProviderResult<vscode.Task[]> {
-    if (!vscode.workspace.isTrusted) {
-      return [];
-    }
     return this.taskManager
       .getAllTasks()
+      .filter((task) => {
+        const source = this.registry.get(task.sourceId);
+        return (
+          task.capabilities.runnable &&
+          source !== undefined &&
+          (vscode.workspace.isTrusted || !source.trust.execution)
+        );
+      })
       .map((task) => this.createNativeTask(task, {}));
   }
 
   resolveTask(task: vscode.Task): vscode.ProviderResult<vscode.Task> {
-    if (!vscode.workspace.isTrusted || task.definition.type !== TASK_TYPE) {
+    if (task.definition.type !== TASK_TYPE) {
       return undefined;
     }
     const definition = task.definition as TaskMosaicDefinition;
     const workspaceFolder =
       task.scope && typeof task.scope !== "number" ? task.scope : undefined;
-    if (!workspaceFolder) {
+    if (
+      !workspaceFolder ||
+      typeof definition.source !== "string" ||
+      typeof definition.project !== "string" ||
+      typeof definition.task !== "string"
+    ) {
+      return undefined;
+    }
+    const sourceId = taskSourceId(definition.source);
+    const source = this.registry.get(sourceId);
+    if (
+      !source ||
+      (!vscode.workspace.isTrusted && source.trust.execution)
+    ) {
       return undefined;
     }
     const project = this.taskManager
@@ -104,7 +171,7 @@ export class NativeTaskService
       .projects.find(
         (candidate) =>
           candidate.workspaceUri === workspaceFolder.uri.toString() &&
-          candidate.frameworkId === definition.framework &&
+          candidate.sourceId === sourceId &&
           candidate.relativePath === definition.project,
       );
     if (!project) {
@@ -112,79 +179,67 @@ export class NativeTaskService
     }
     const discovered = this.taskManager
       .getTasksForProject(project.key)
-      .find((candidate) => candidate.frameworkTaskId === definition.task);
+      .find((candidate) => candidate.sourceTaskId === definition.task);
     if (!discovered) {
       return undefined;
     }
-    return this.createNativeTask(discovered, {
-      runnerArgs: this.stringArray(definition.runnerArgs),
-      taskArgs: this.stringArray(definition.taskArgs),
-    });
+    return this.createNativeTask(
+      discovered,
+      { inputs: this.jsonObject(definition.inputs) },
+      definition,
+    );
   }
 
   async runTask(
-    task: Task,
-    options: TaskRunOptions = {},
+    task: DiscoveredTask,
+    invocation: TaskInvocation = {},
   ): Promise<TaskRunResult> {
-    if (!vscode.workspace.isTrusted) {
-      throw new Error("Trust this workspace before running tasks.");
+    const source = this.registry.get(task.sourceId);
+    if (!source) {
+      throw new Error(`Task source '${task.sourceId}' is unavailable.`);
     }
-    if (this.activeByTask.has(task.key)) {
-      throw new Error(`Task '${task.label}' is already running.`);
+    if (!task.capabilities.runnable) {
+      throw new Error(`Task '${task.label}' is not runnable.`);
     }
-    const nativeTask = this.createNativeTask(task, options);
-    const definition = nativeTask.definition as TaskMosaicDefinition;
-    const context = this.createContext(
-      task,
-      definition.runToken!,
-      definition.reportPath!,
-    );
-    this.contexts.set(context.token, context);
-    this.activeByTask.set(task.key, context);
-    this.taskManager.setTaskStatus(task.key, "queued");
+    if (!vscode.workspace.isTrusted && source.trust.execution) {
+      throw new Error("Trust this workspace before running this task.");
+    }
+    const nativeTask = this.createNativeTask(task, invocation);
+    const prepared = this.preparedTasks.get(nativeTask)!;
+    const result = this.tracker.queue(nativeTask, prepared);
+
     try {
-      context.execution = await vscode.tasks.executeTask(nativeTask);
-      return await context.promise;
+      const execution = await vscode.tasks.executeTask(nativeTask);
+      this.tracker.attachExecution(nativeTask, execution);
     } catch (error: unknown) {
-      if (!context.settled) {
-        await this.settle(
-          context,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      return context.promise;
+      await this.tracker.launchFailed(nativeTask, error);
     }
+    return result;
   }
 
   cancelTask(taskKey: TaskKey): boolean {
-    const context = this.activeByTask.get(taskKey);
-    if (!context) {
-      return false;
-    }
-    context.cancelledRequested = true;
-    context.execution?.terminate();
-    return true;
+    return this.tracker.cancelTask(taskKey);
   }
 
   getLastResult(taskKey: TaskKey): TaskRunResult | undefined {
-    return this.lastResults.get(taskKey);
+    return this.tracker.getLastResult(taskKey);
   }
 
   dispose(): void {
+    this.tracker.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
-    for (const context of this.activeByTask.values()) {
-      context.cancelledRequested = true;
-      context.execution?.terminate();
-    }
   }
 
-  private createNativeTask(task: Task, options: TaskRunOptions): vscode.Task {
+  private createNativeTask(
+    task: DiscoveredTask,
+    invocation: TaskInvocation,
+    existingDefinition?: TaskMosaicDefinition,
+  ): vscode.Task {
     const project = this.taskManager.getProject(task.projectKey);
-    const framework = this.registry.get(task.frameworkId);
-    if (!project || !framework) {
+    const source = this.registry.get(task.sourceId);
+    if (!project || !source) {
       throw new Error(`Cannot resolve task '${task.label}'.`);
     }
     const workspaceFolder = vscode.workspace.workspaceFolders?.find(
@@ -194,32 +249,58 @@ export class NativeTaskService
       throw new Error(`Workspace for task '${task.label}' is unavailable.`);
     }
 
-    const runToken = this.nextToken();
-    const reportPath = path.join(this.reportsDirectory, `${runToken}.json`);
-    const definition: TaskMosaicDefinition = {
+    const artifactPrefix = this.nextToken();
+    const plan = source.createExecution(task, project, invocation, {
+      createArtifactPath: (name) =>
+        path.join(
+          this.artifactsDirectory,
+          `${artifactPrefix}-${path.basename(name)}`,
+        ),
+    });
+    const definition: TaskMosaicDefinition = existingDefinition ?? {
       type: TASK_TYPE,
-      framework: task.frameworkId,
+      source: task.sourceId,
       project: project.relativePath,
-      task: task.frameworkTaskId,
-      runnerArgs: options.runnerArgs,
-      taskArgs: options.taskArgs,
-      taskKey: task.key,
-      runToken,
-      reportPath,
+      task: task.sourceTaskId,
+      ...(invocation.inputs ? { inputs: invocation.inputs } : {}),
     };
-    const spec = framework.createExecution(
-      task,
-      project,
-      options,
-      getFrameworkConfig(task.frameworkId, vscode.Uri.parse(project.rootUri)),
-      reportPath,
-    );
-    const nativeTask = new vscode.Task(
+
+    let nativeTask!: vscode.Task;
+    const execution =
+      plan.kind === "process"
+        ? new vscode.ProcessExecution(plan.command, plan.args, {
+            cwd: plan.cwd,
+            env: plan.env,
+          })
+        : new vscode.CustomExecution(
+            async () =>
+              new ManagedTaskTerminal(
+                plan,
+                () =>
+                  this.tracker.managedCancelled(nativeTask, {
+                    task,
+                    plan,
+                  }),
+                (outcome) =>
+                  this.tracker.managedOutcome(
+                    nativeTask,
+                    { task, plan },
+                    outcome,
+                  ),
+                (error) =>
+                  this.tracker.managedError(
+                    nativeTask,
+                    { task, plan },
+                    error,
+                  ),
+              ),
+          );
+    nativeTask = new vscode.Task(
       definition,
       workspaceFolder,
       task.label,
-      `TaskMosaic: ${framework.displayName}`,
-      new vscode.ProcessExecution(spec.command, spec.args, { cwd: spec.cwd }),
+      `TaskMosaic: ${source.displayName}`,
+      execution,
       [],
     );
     nativeTask.detail = task.description;
@@ -229,170 +310,8 @@ export class NativeTaskService
       focus: false,
       clear: false,
     };
+    this.preparedTasks.set(nativeTask, { task, plan });
     return nativeTask;
-  }
-
-  private handleTaskStart(event: vscode.TaskStartEvent): void {
-    const definition = event.execution.task.definition as TaskMosaicDefinition;
-    if (
-      definition.type !== TASK_TYPE ||
-      !definition.taskKey ||
-      !definition.runToken
-    ) {
-      return;
-    }
-    let context = this.contexts.get(definition.runToken);
-    const task = this.taskManager.getTask(definition.taskKey);
-    if (!task) {
-      event.execution.terminate();
-      return;
-    }
-    const existing = this.activeByTask.get(task.key);
-    if (existing && existing.token !== definition.runToken) {
-      this.output.appendLine(
-        `[task] Refusing duplicate execution of ${task.label}.`,
-      );
-      event.execution.terminate();
-      return;
-    }
-    if (!context) {
-      context = this.createContext(
-        task,
-        definition.runToken,
-        definition.reportPath!,
-      );
-      this.contexts.set(context.token, context);
-      this.activeByTask.set(task.key, context);
-    }
-    context.execution = event.execution;
-    context.startTime = new Date();
-    if (context.cancelledRequested) {
-      event.execution.terminate();
-    }
-    this.taskManager.setTaskStatus(task.key, "running");
-  }
-
-  private async handleTaskProcessEnd(
-    event: vscode.TaskProcessEndEvent,
-  ): Promise<void> {
-    const context = this.contextForExecution(event.execution);
-    if (!context) {
-      return;
-    }
-    context.processEventSeen = true;
-    await this.settle(context, event.exitCode);
-  }
-
-  private handleTaskEnd(event: vscode.TaskEndEvent): void {
-    const context = this.contextForExecution(event.execution);
-    if (!context || context.settled || context.processEventSeen) {
-      return;
-    }
-    setTimeout(() => {
-      if (!context.settled && !context.processEventSeen) {
-        void this.settle(
-          context,
-          undefined,
-          "Task ended before its process started.",
-        );
-      }
-    }, 0);
-  }
-
-  private async settle(
-    context: RunContext,
-    exitCode?: number,
-    launchError?: string,
-  ): Promise<void> {
-    if (context.settled) {
-      return;
-    }
-    context.settled = true;
-    const endTime = new Date();
-    let status: TaskRunResult["status"];
-    let reason: string | undefined;
-
-    if (context.cancelledRequested) {
-      status = "cancelled";
-    } else {
-      const framework = this.registry.get(context.task.frameworkId);
-      let reportOutcome;
-      try {
-        reportOutcome = await framework?.interpretResult(
-          context.reportPath,
-          context.startTime,
-        );
-      } catch (error: unknown) {
-        this.output.appendLine(
-          `[task] Could not interpret the result for ${context.task.label}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      if (reportOutcome) {
-        status = reportOutcome.status;
-        reason = reportOutcome.reason;
-      } else if (launchError) {
-        status = "failed";
-        reason = launchError;
-      } else {
-        status = exitCode === 0 ? "succeeded" : "failed";
-        if (exitCode === undefined) {
-          reason = "Task process did not report an exit code.";
-        }
-      }
-    }
-
-    const result: TaskRunResult = {
-      taskKey: context.task.key,
-      status,
-      exitCode,
-      startTime: context.startTime,
-      endTime,
-      durationMs: Math.max(0, endTime.getTime() - context.startTime.getTime()),
-      reason,
-    };
-    this.lastResults.set(context.task.key, result);
-    this.taskManager.setTaskStatus(context.task.key, status);
-    this.activeByTask.delete(context.task.key);
-    this.contexts.delete(context.token);
-    try {
-      await fs.promises.rm(context.reportPath, { force: true });
-    } catch (error: unknown) {
-      this.output.appendLine(
-        `[task] Could not remove result report ${context.reportPath}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    context.resolve(result);
-  }
-
-  private contextForExecution(
-    execution: vscode.TaskExecution,
-  ): RunContext | undefined {
-    const definition = execution.task.definition as TaskMosaicDefinition;
-    return definition.runToken
-      ? this.contexts.get(definition.runToken)
-      : undefined;
-  }
-
-  private createContext(
-    task: Task,
-    token: string,
-    reportPath: string,
-  ): RunContext {
-    let resolve!: (result: TaskRunResult) => void;
-    const promise = new Promise<TaskRunResult>((resolvePromise) => {
-      resolve = resolvePromise;
-    });
-    return {
-      token,
-      task,
-      reportPath,
-      startTime: new Date(),
-      processEventSeen: false,
-      cancelledRequested: false,
-      settled: false,
-      resolve,
-      promise,
-    };
   }
 
   private nextToken(): string {
@@ -400,10 +319,31 @@ export class NativeTaskService
     return `${Date.now()}-${process.pid}-${this.tokenCounter}`;
   }
 
-  private stringArray(value: unknown): string[] | undefined {
-    return Array.isArray(value) &&
-      value.every((item) => typeof item === "string")
-      ? value
+  private jsonObject(value: unknown): JsonObject | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    const entries = Object.entries(value);
+    return entries.every(([, item]) => this.isJsonValue(item))
+      ? Object.fromEntries(entries)
       : undefined;
+  }
+
+  private isJsonValue(value: unknown): value is JsonValue {
+    if (
+      value === null ||
+      ["string", "number", "boolean"].includes(typeof value)
+    ) {
+      return true;
+    }
+    if (Array.isArray(value)) {
+      return value.every((item) => this.isJsonValue(item));
+    }
+    return (
+      typeof value === "object" &&
+      Object.values(value as Record<string, unknown>).every((item) =>
+        this.isJsonValue(item),
+      )
+    );
   }
 }

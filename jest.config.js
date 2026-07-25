@@ -27,7 +27,7 @@ module.exports = {
       functions: 70,
       lines: 70,
     },
-    "./src/frameworks/nox/nox-framework.ts": {
+    "./src/frameworks/nox/nox-task-source.ts": {
       statements: 70,
       branches: 50,
       functions: 80,
@@ -38,6 +38,18 @@ module.exports = {
       branches: 25,
       functions: 55,
       lines: 55,
+    },
+    "./src/vscode/task-run-tracker.ts": {
+      statements: 60,
+      branches: 40,
+      functions: 60,
+      lines: 60,
+    },
+    "./src/vscode/workspace-task-service.ts": {
+      statements: 40,
+      branches: 25,
+      functions: 40,
+      lines: 40,
     },
   },
 };

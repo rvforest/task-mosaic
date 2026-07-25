@@ -2,7 +2,7 @@ import { TaskManager } from "../../src/core/task-manager";
 import { project, task } from "../helpers";
 
 describe("TaskManager", () => {
-  it("keeps duplicate framework task IDs isolated by project", () => {
+  it("keeps duplicate source task IDs isolated by project", () => {
     const manager = new TaskManager();
     const firstProject = project();
     const secondProject = project({
@@ -75,17 +75,21 @@ describe("TaskManager", () => {
     const manager = new TaskManager();
     const taskProject = project();
     const lint = task(taskProject, "lint", {
-      tags: ["quality"],
-      isDefault: true,
+      groups: [{ kind: "tag", id: "quality", label: "Quality" }],
+      roles: ["default"],
     });
-    const tests = task(taskProject, "tests", { tags: ["test"] });
+    const tests = task(taskProject, "tests", {
+      groups: [{ kind: "tag", id: "test", label: "Test" }],
+    });
     manager.applyDiscoveryResults(
       [{ project: taskProject, tasks: [lint, tests] }],
       new Set([taskProject.key]),
       false,
     );
 
-    expect(manager.findTasks({ tag: "quality" })).toEqual([lint]);
-    expect(manager.findTasks({ isDefault: true })).toEqual([lint]);
+    expect(
+      manager.findTasks({ group: { kind: "tag", id: "quality" } }),
+    ).toEqual([lint]);
+    expect(manager.findTasks({ role: "default" })).toEqual([lint]);
   });
 });

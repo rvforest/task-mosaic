@@ -2,18 +2,20 @@ import { execFile } from "child_process";
 import * as fs from "fs";
 import { promisify } from "util";
 
-import { FrameworkDiscoveryError } from "../../core/framework/errors";
+import { TaskSourceDiscoveryError } from "../../core/task-source/errors";
 import {
-  ExecutionSpec,
   ExecutionOutcome,
-  FrameworkAdapter,
-  FrameworkCommandConfig,
-} from "../../core/framework/framework";
+  ExecutionPlan,
+  ExecutionPreparation,
+  TaskSource,
+} from "../../core/task-source/task-source";
 import {
   createTaskKey,
-  Task,
+  DiscoveredTask,
+  JsonValue,
+  TaskInvocation,
   TaskProject,
-  TaskRunOptions,
+  taskSourceId,
 } from "../../core/tasks/types";
 import { NoxListSessionsJson } from "./types";
 
@@ -21,6 +23,14 @@ const execFileAsync = promisify(execFile);
 const MINIMUM_NOX_VERSION = [2026, 4, 10] as const;
 const DISCOVERY_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+export interface NoxCommandConfig {
+  command: string;
+  commandArgs: string[];
+  runnerArgs: string[];
+}
+
+type NoxConfigProvider = (project: TaskProject) => NoxCommandConfig;
 
 type CommandExecutor = (
   command: string,
@@ -39,19 +49,36 @@ interface ProcessError extends Error {
   stderr?: string;
 }
 
-export class NoxFramework implements FrameworkAdapter {
-  readonly id = "nox";
+export interface NoxTaskSourceOptions {
+  executeCommand?: CommandExecutor;
+  getConfig?: NoxConfigProvider;
+}
+
+const defaultConfig: NoxConfigProvider = () => ({
+  command: "nox",
+  commandArgs: [],
+  runnerArgs: [],
+});
+
+export class NoxTaskSource implements TaskSource {
+  readonly id = taskSourceId("nox");
   readonly displayName = "Nox";
-  readonly configurationFileNames = ["noxfile.py"] as const;
+  readonly projectDiscovery = {
+    kind: "configurationFiles",
+    patterns: ["**/noxfile.py"],
+  } as const;
+  readonly trust = { discovery: true, execution: true };
 
-  constructor(
-    private readonly executeCommand: CommandExecutor = execFileAsync,
-  ) {}
+  private readonly executeCommand: CommandExecutor;
+  private readonly getConfig: NoxConfigProvider;
 
-  async discover(
-    project: TaskProject,
-    config: FrameworkCommandConfig,
-  ): Promise<Task[]> {
+  constructor(options: NoxTaskSourceOptions = {}) {
+    this.executeCommand = options.executeCommand ?? execFileAsync;
+    this.getConfig = options.getConfig ?? defaultConfig;
+  }
+
+  async discover(project: TaskProject): Promise<DiscoveredTask[]> {
+    const config = this.getConfig(project);
     const versionResult = await this.run(
       config,
       ["--version"],
@@ -81,31 +108,38 @@ export class NoxFramework implements FrameworkAdapter {
   }
 
   createExecution(
-    task: Task,
+    task: DiscoveredTask,
     project: TaskProject,
-    options: TaskRunOptions,
-    config: FrameworkCommandConfig,
-    reportPath: string,
-  ): ExecutionSpec {
+    invocation: TaskInvocation,
+    preparation: ExecutionPreparation,
+  ): ExecutionPlan {
+    const config = this.getConfig(project);
+    const reportPath = preparation.createArtifactPath("nox-report.json");
+    const runnerArgs = this.stringArrayInput(invocation, "runnerArgs");
+    const taskArgs = this.stringArrayInput(invocation, "taskArgs");
     return {
+      kind: "process",
       command: config.command,
       args: [
         ...config.commandArgs,
         ...config.runnerArgs,
-        ...(options.runnerArgs ?? []),
+        ...runnerArgs,
         "--report",
         reportPath,
         "-s",
-        task.frameworkTaskId,
-        ...((options.taskArgs?.length ?? 0) > 0
-          ? ["--", ...(options.taskArgs ?? [])]
-          : []),
+        task.sourceTaskId,
+        ...(taskArgs.length > 0 ? ["--", ...taskArgs] : []),
       ],
       cwd: project.rootPath,
+      result: {
+        resolve: (executionStartedAt) =>
+          this.interpretResult(reportPath, executionStartedAt),
+        cleanup: () => fs.promises.rm(reportPath, { force: true }),
+      },
     };
   }
 
-  async interpretResult(
+  private async interpretResult(
     reportPath: string,
     executionStartedAt: Date,
   ): Promise<ExecutionOutcome | undefined> {
@@ -135,8 +169,19 @@ export class NoxFramework implements FrameworkAdapter {
     }
   }
 
+  private stringArrayInput(
+    invocation: TaskInvocation,
+    key: string,
+  ): string[] {
+    const value: JsonValue | undefined = invocation.inputs?.[key];
+    return Array.isArray(value) &&
+      value.every((item) => typeof item === "string")
+      ? value
+      : [];
+  }
+
   private async run(
-    config: FrameworkCommandConfig,
+    config: NoxCommandConfig,
     args: string[],
     cwd: string,
   ): Promise<{ stdout: string; stderr?: string }> {
@@ -155,7 +200,7 @@ export class NoxFramework implements FrameworkAdapter {
     } catch (error: unknown) {
       const processError = error as ProcessError;
       if (processError.code === "ENOENT") {
-        throw new FrameworkDiscoveryError(
+        throw new TaskSourceDiscoveryError(
           "missingExecutable",
           `Nox command '${config.command}' was not found.`,
         );
@@ -164,18 +209,18 @@ export class NoxFramework implements FrameworkAdapter {
         processError.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
         processError.message?.includes("maxBuffer")
       ) {
-        throw new FrameworkDiscoveryError(
+        throw new TaskSourceDiscoveryError(
           "outputLimit",
           "Nox discovery produced more than 10 MiB of output.",
         );
       }
       if (processError.killed || processError.code === "ETIMEDOUT") {
-        throw new FrameworkDiscoveryError(
+        throw new TaskSourceDiscoveryError(
           "timeout",
           "Nox discovery exceeded the 30 second timeout.",
         );
       }
-      throw new FrameworkDiscoveryError(
+      throw new TaskSourceDiscoveryError(
         "invalidConfiguration",
         "Nox could not load this project.",
         processError.stderr || processError.message,
@@ -186,7 +231,7 @@ export class NoxFramework implements FrameworkAdapter {
   private assertSupportedVersion(rawVersion: string): void {
     const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\D.*)?$/.exec(rawVersion);
     if (!match) {
-      throw new FrameworkDiscoveryError(
+      throw new TaskSourceDiscoveryError(
         "unsupportedVersion",
         `Unable to parse Nox version '${rawVersion}'.`,
       );
@@ -205,7 +250,7 @@ export class NoxFramework implements FrameworkAdapter {
       }) || version.every((part, index) => part === MINIMUM_NOX_VERSION[index]);
 
     if (!supported) {
-      throw new FrameworkDiscoveryError(
+      throw new TaskSourceDiscoveryError(
         "unsupportedVersion",
         `Nox ${rawVersion} is unsupported. TaskMosaic requires Nox 2026.04.10 or newer.`,
       );
@@ -217,14 +262,14 @@ export class NoxFramework implements FrameworkAdapter {
     try {
       value = JSON.parse(output);
     } catch (error: unknown) {
-      throw new FrameworkDiscoveryError(
+      throw new TaskSourceDiscoveryError(
         "malformedOutput",
         "Nox returned invalid JSON.",
         error instanceof Error ? error.message : String(error),
       );
     }
     if (!Array.isArray(value)) {
-      throw new FrameworkDiscoveryError(
+      throw new TaskSourceDiscoveryError(
         "malformedOutput",
         "Nox session output was not an array.",
       );
@@ -274,8 +319,8 @@ export class NoxFramework implements FrameworkAdapter {
     };
   }
 
-  private invalidSession(index: number): FrameworkDiscoveryError {
-    return new FrameworkDiscoveryError(
+  private invalidSession(index: number): TaskSourceDiscoveryError {
+    return new TaskSourceDiscoveryError(
       "malformedOutput",
       `Nox session at index ${index} did not match the expected schema.`,
     );
@@ -285,20 +330,29 @@ export class NoxFramework implements FrameworkAdapter {
     session: NoxListSessionsJson,
     project: TaskProject,
     isDefault: boolean,
-  ): Task {
+  ): DiscoveredTask {
     const hasMatrix =
       session.python !== null || Object.keys(session.call_spec).length > 0;
     return {
       key: createTaskKey(project.key, session.session),
-      frameworkTaskId: session.session,
-      frameworkId: this.id,
+      sourceTaskId: session.session,
+      sourceId: this.id,
       projectKey: project.key,
       label: session.session,
       description: session.description || undefined,
-      tags: [...session.tags],
-      matrixGroup: hasMatrix ? session.name : undefined,
-      parameters: { ...session.call_spec },
-      isDefault,
+      groups: [
+        ...session.tags.map((tag) => ({ kind: "tag", id: tag, label: tag })),
+        ...(hasMatrix
+          ? [{ kind: "matrix", id: session.name, label: session.name }]
+          : []),
+      ],
+      roles: isDefault ? ["default"] : [],
+      capabilities: {
+        runnable: true,
+        cancellable: true,
+        acceptsInputs: true,
+      },
+      sourceData: { parameters: { ...session.call_spec } },
     };
   }
 }
