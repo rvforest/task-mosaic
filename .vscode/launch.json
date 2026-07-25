@@ -1,8 +1,8 @@
 {
-   "version": "0.2.0",
-   "configurations": [
-   {
-      "name": "Run Extension",
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run TaskMosaic",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
@@ -10,7 +10,7 @@
         "--extensionDevelopmentPath=${workspaceFolder}",
         "${workspaceFolder}/test/fixtures/frameworks/nox/projects/sample-nox-project"
       ],
-      "preLaunchTask": "npm: compile"
-    },
+      "preLaunchTask": "npm: package"
+    }
   ]
 }
