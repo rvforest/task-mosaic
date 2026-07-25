@@ -1,121 +1,156 @@
-import { ExecutionManager } from "./execution/execution-manager";
-import { TaskProvider } from "./task-providers/task-provider";
-import { Task, TaskStatus } from "./tasks/types";
-import { TaskExecution, TaskOptions } from "./execution/types";
+import {
+  DiscoveryError,
+  DiscoveryState,
+  DiscoveredTask,
+  ProjectDiscoveryResult,
+  ProjectKey,
+  TaskKey,
+  TaskProject,
+  TaskSourceId,
+  TaskStatus,
+} from "./tasks/types";
 
-// A class to manage tasks across different providers
+type Listener = () => void;
+
 export class TaskManager {
-  /**
-   * Get the current status of a task. 
-   * @throws Error if the task does not exist
-   */
-  getTaskStatus(taskId: string): TaskStatus {
-    const task = this.getTask(taskId);
-    if (!task) {
-      throw new Error(`Task with ID '${taskId}' not found`);
-    }
-    const executions = this.executionManager.getExecutionsForTask(task.name, task.frameworkName);
-    if (executions.length === 0) return "idle";
-    const active = executions.find(e => e.status === "running" || e.status === "pending");
-    if (active) return active.status;
-    return executions[0].status; // Return the actual execution status
-  }
-  private availableProviders: TaskProvider[] = [];
-  private tasks: Map<string, Task> = new Map();
-  private searchDirectories: string[];
-  private executionManager: ExecutionManager = new ExecutionManager();
+  private tasks = new Map<TaskKey, DiscoveredTask>();
+  private projects = new Map<ProjectKey, TaskProject>();
+  private errors = new Map<ProjectKey, DiscoveryError>();
+  private statuses = new Map<TaskKey, TaskStatus>();
+  private listeners = new Set<Listener>();
+  private phase: DiscoveryState["phase"] = "idle";
+  private truncated = false;
 
-  constructor(searchDirectories: string[]) {
-    this.searchDirectories = searchDirectories;
+  onDidChange(listener: Listener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
-  setAvailableProviders(providers: TaskProvider[]): void {
-    this.availableProviders = providers;
+  setLoading(): void {
+    this.phase = "loading";
+    this.emit();
   }
 
-  async refreshTasks(): Promise<void> {
+  setUntrusted(): void {
+    this.phase = "untrusted";
     this.tasks.clear();
+    this.projects.clear();
+    this.errors.clear();
+    this.statuses.clear();
+    this.emit();
+  }
 
-    for (const provider of this.availableProviders) {
-      try {
-        const providerTasks = await provider.listTasks(this.searchDirectories);
-        providerTasks.forEach((task) => {
-          this.tasks.set(task.taskId, task);
-        });
-      } catch (error) {
-        console.error(
-          `Failed to get tasks from ${provider.name}:`,
-          error,
-        );
+  applyDiscoveryResults(
+    results: ProjectDiscoveryResult[],
+    currentProjectKeys: Set<ProjectKey>,
+    truncated: boolean,
+  ): void {
+    for (const key of [...this.projects.keys()]) {
+      if (!currentProjectKeys.has(key)) {
+        this.projects.delete(key);
+        this.errors.delete(key);
+        for (const task of this.tasks.values()) {
+          if (task.projectKey === key) {
+            this.tasks.delete(task.key);
+            this.statuses.delete(task.key);
+          }
+        }
       }
     }
-  }
 
-  getTask(id: string): Task | undefined {
-    return this.tasks.get(id);
-  }
+    for (const result of results) {
+      this.projects.set(result.project.key, result.project);
+      if ("error" in result) {
+        this.errors.set(result.project.key, result.error);
+        continue;
+      }
 
-  getAllTasks(): Task[] {
-    return Array.from(this.tasks.values());
-  }
-
-  getTasksByProvider(frameworkName: string): Task[] {
-    return Array.from(this.tasks.values()).filter(
-      (task) => task.frameworkName === frameworkName,
-    );
-  }
-
-  getTasksByMatrixGroup(group: string): Task[] {
-    return Array.from(this.tasks.values()).filter(
-      (task) => task.matrixGroup === group,
-    );
-  }
-
-  getTasksByCategoryGroup(group: string): Task[] {
-    return Array.from(this.tasks.values()).filter((task) =>
-      task.categoryGroups?.includes(group),
-    );
-  }
-
-  // ====================
-  // EXECUTION METHODS
-  // ====================
-
-  /**
-   * Execute a task by ID
-   */
-  async executeTask(taskId: string, options: TaskOptions = {}): Promise<TaskExecution> {
-    const task = this.getTask(taskId);
-    if (!task) {
-      throw new Error(`Task with ID '${taskId}' not found`);
+      this.errors.delete(result.project.key);
+      const previousKeys: TaskKey[] = [];
+      for (const task of [...this.tasks.values()]) {
+        if (task.projectKey === result.project.key) {
+          previousKeys.push(task.key);
+          this.tasks.delete(task.key);
+        }
+      }
+      for (const task of result.tasks ?? []) {
+        this.tasks.set(task.key, task);
+      }
+      const currentKeys = new Set((result.tasks ?? []).map((task) => task.key));
+      for (const previousKey of previousKeys) {
+        if (!currentKeys.has(previousKey)) {
+          this.statuses.delete(previousKey);
+        }
+      }
     }
-    return this.executionManager.executeTask(task, options);
+
+    this.phase = "ready";
+    this.truncated = truncated;
+    this.emit();
   }
 
-  /**
-   * Get execution manager for direct access
-   */
-  getExecutionManager(): ExecutionManager {
-    return this.executionManager;
+  getDiscoveryState(): DiscoveryState {
+    return {
+      phase: this.phase,
+      projects: [...this.projects.values()],
+      errors: new Map(this.errors),
+      truncated: this.truncated,
+    };
   }
 
-  /**
-   * Check if a task is currently running
-   */
-  isTaskRunning(taskId: string): boolean {
-    const task = this.getTask(taskId);
-    if (!task) return false;
-    
-    return this.executionManager.isTaskRunning(task.name, task.frameworkName);
+  getTask(key: TaskKey): DiscoveredTask | undefined {
+    return this.tasks.get(key);
   }
 
-  /**
-   * Get all executions for a task
-   */
-  getTaskExecutions(taskId: string): TaskExecution[] {
-    const task = this.getTask(taskId);
-    if (!task) return [];
-    
-    return this.executionManager.getExecutionsForTask(task.name, task.frameworkName);
+  getProject(key: ProjectKey): TaskProject | undefined {
+    return this.projects.get(key);
+  }
+
+  getAllTasks(): DiscoveredTask[] {
+    return [...this.tasks.values()];
+  }
+
+  getTasksForProject(projectKey: ProjectKey): DiscoveredTask[] {
+    return this.getAllTasks().filter((task) => task.projectKey === projectKey);
+  }
+
+  getTaskStatus(key: TaskKey): TaskStatus {
+    return this.statuses.get(key) ?? "idle";
+  }
+
+  setTaskStatus(key: TaskKey, status: TaskStatus): void {
+    this.statuses.set(key, status);
+    this.emit();
+  }
+
+  findTasks(criteria: {
+    workspaceUri?: string;
+    projectKey?: ProjectKey;
+    sourceId?: TaskSourceId;
+    group?: { kind: string; id: string };
+    role?: string;
+  }): DiscoveredTask[] {
+    return this.getAllTasks().filter((task) => {
+      const project = this.projects.get(task.projectKey);
+      return (
+        (!criteria.workspaceUri ||
+          project?.workspaceUri === criteria.workspaceUri) &&
+        (!criteria.projectKey || task.projectKey === criteria.projectKey) &&
+        (!criteria.sourceId || task.sourceId === criteria.sourceId) &&
+        (!criteria.group ||
+          task.groups.some(
+            (group) =>
+              group.kind === criteria.group?.kind &&
+              group.id === criteria.group.id,
+          )) &&
+        (!criteria.role || task.roles.includes(criteria.role))
+      );
+    });
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }
