@@ -5,6 +5,30 @@ VS Code integration. A task source may represent a language tool, automation
 framework, workspace manifest, extension API, or remote service. Nox is the
 first source, not the shape of the universal model.
 
+```text
+ Task sources
+ (Nox, future sources)
+          |
+          | discover + normalize
+          v
+ WorkspaceTaskService ---> Task store ---> Tree view
+          |                     |
+          |                     v
+          |              NativeTaskService
+          |                     |
+          |              request execution plan
+          v                     v
+      TaskSource ------> ExecutionPlan
+                            /       \
+                     Process       Managed
+                        |             |
+                ProcessExecution  CustomExecution
+                        \             /
+                         VS Code Task API
+                                |
+                         TaskRunTracker
+```
+
 ## Discovery
 
 `WorkspaceTaskService` coordinates discovery declared by registered
