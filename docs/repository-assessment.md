@@ -10,7 +10,7 @@ TaskMosaic is not currently usable with a current Nox installation. The primary 
 
 Even after discovery is repaired, execution has several release-blocking correctness problems. Failed and skipped runner results are reported as completed, process spawn failures can remain running forever, execution validation is not awaited, group runs exceed the concurrency limit instead of queuing, and "Run All with Arguments" discards the entered arguments and prompts once per child. Multi-root workspaces also overwrite tasks with the same session ID and allow group commands to cross workspace boundaries.
 
-The repository is a substantial prototype rather than a release-ready extension. Its internal decomposition is reasonable and its 227 tests pass, but the tests mock the behaviors that are broken in real use. There is no Extension Host test, no current-Nox compatibility test, no packaging gate, and no coverage of activation or the real command implementations. The recommended course is to stabilize Nox-only behavior before adding more frameworks.
+The repository is a substantial prototype rather than a release-ready extension. Its internal decomposition is reasonable and its 227 tests pass, but the tests mock the behaviors that are broken in real use. There is no Extension Host test, no current-Nox compatibility test, no packaging gate, and no coverage of activation or the real command implementations. The recommended course is to stabilize Nox-only behavior before adding more task sources, while keeping source discovery and execution backend as separate extension axes.
 
 ## What was verified
 
@@ -182,7 +182,11 @@ The tree registration disposable is not added to `context.subscriptions`; the ex
 
 - Integrate with VS Code's Task API so discovered sessions can participate in standard task workflows and keybindings.
 - Add filtering/search, favorites, recent runs, duration, and rerun-last-failed once execution history is trustworthy.
-- Add framework support only through a documented provider contract and compatibility suite. Tox is the most natural second framework; avoid claiming generic multi-framework support until a second provider ships.
+- Add task sources only through a documented source contract and compatibility
+  suite. Keep task-source discovery separate from execution-plan backends so a
+  source is not required to delegate work to a shell or operating-system
+  process. Tox is the most natural second production source; avoid claiming
+  generic multi-source support until a second source ships.
 - Consider debug/test integrations only after the basic runner is reliable. A Test Explorer integration is a different product surface from a task browser and should not be implied by visual similarity alone.
 
 ## Recommended delivery plan
