@@ -1,35 +1,22 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-json
-      - id: check-added-large-files
-      - id: no-commit-to-branch
-        args: [--branch, main]
-
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v3.1.0
+  - repo: local
     hooks:
       - id: prettier
-        types_or: [javascript, jsx, ts, tsx, json, css, markdown]
-        additional_dependencies:
-          - prettier@3.1.0
-          - '@typescript-eslint/parser'
-          - '@typescript-eslint/eslint-plugin'
-
-  - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: v8.54.0
-    hooks:
+        name: prettier
+        entry: npx prettier --check
+        language: system
+        types_or: [javascript, jsx, ts, tsx, json, css, markdown, yaml]
       - id: eslint
-        files: \.[jt]sx?$  # *.js, *.jsx, *.ts and *.tsx
-        types: [file]
-        additional_dependencies:
-          - eslint@8.54.0
-          - '@typescript-eslint/parser'
-          - '@typescript-eslint/eslint-plugin'
-          - eslint-config-prettier
+        name: eslint
+        entry: npm run lint --
+        language: system
+        files: \.[jt]sx?$
+        pass_filenames: false
+      - id: typecheck
+        name: typecheck
+        entry: npm run typecheck
+        language: system
+        files: \.(ts|json)$
+        pass_filenames: false
 
 default_stages: [pre-commit, pre-push]

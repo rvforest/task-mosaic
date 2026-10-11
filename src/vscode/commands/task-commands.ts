@@ -1,217 +1,174 @@
-import * as vscode from 'vscode';
-import { TaskManager } from '../../core/task-manager';
-import { ExecutionManager } from '../../core/execution/execution-manager';
-import { FrameworkRegistry } from '../../core/framework/framework-registry';
-import { TaskTreeProvider } from '../ui/tree-view/TaskTreeProvider';
-import { TaskTreeItem } from '../ui/tree-view/TaskTreeItem';
-import { Task } from '../../core/tasks/types';
+import * as vscode from "vscode";
+
+import { TaskManager } from "../../core/task-manager";
+import { TaskSourceRegistry } from "../../core/task-source/task-source-registry";
+import {
+  DiscoveredTask,
+  TaskInvocation,
+  TaskKey,
+} from "../../core/tasks/types";
+import { RunCoordinator } from "../run-coordinator";
+import { TaskTreeItem } from "../ui/tree-view/TaskTreeItem";
+import { tasksForGroup } from "../ui/tree-view/TaskTreeProvider";
 
 export class TaskCommands {
-
-  // Shared observer to refresh tree view
-  private refreshTreeObserver = {
-    onExecutionStarted: () => {
-      this.treeProvider.refresh();
-    },
-    onExecutionCompleted: () => {
-      this.treeProvider.refresh();
-    },
-    onExecutionFailed: () => {
-      this.treeProvider.refresh();
-    },
-    onStateChanged: () => {
-      this.treeProvider.refresh();
-    },
-    onOutputReceived: () => {
-      // Don't refresh on every output line to avoid performance issues
-    }
-  };
   constructor(
-    private taskManager: TaskManager,
-    private executionManager: ExecutionManager,
-    private treeProvider: TaskTreeProvider,
-    private outputChannel?: vscode.OutputChannel
-  ) {
-    // Register the observer once to handle all task execution state changes
-    this.executionManager.addObserver(this.refreshTreeObserver);
-  }
+    private readonly taskManager: TaskManager,
+    private readonly registry: TaskSourceRegistry,
+    private readonly coordinator: RunCoordinator,
+  ) {}
 
   registerCommands(context: vscode.ExtensionContext): void {
-    const commands = [
-      this.createRunTaskCommand(),
-      this.createRunTaskWithArgsCommand(),
-      this.createRunTaskVerboseCommand(),
-      this.createRunAllDefaultCommand(),
-      this.createRunParentTaskCommand(),
-      this.createRunTagGroupCommand(),
-      this.createRunParentTaskWithArgsCommand()
-    ];
-
-    context.subscriptions.push(...commands);
+    context.subscriptions.push(
+      vscode.commands.registerCommand("taskMosaic.runTask", (value) =>
+        this.runTask(value),
+      ),
+      vscode.commands.registerCommand("taskMosaic.runTaskWithArgs", (value) =>
+        this.runTaskWithArgs(value),
+      ),
+      vscode.commands.registerCommand("taskMosaic.runAllDefaultTasks", () =>
+        this.runAllDefaults(),
+      ),
+      vscode.commands.registerCommand("taskMosaic.runGroup", (item) =>
+        this.runGroup(item),
+      ),
+      vscode.commands.registerCommand("taskMosaic.runGroupWithArgs", (item) =>
+        this.runGroupWithArgs(item),
+      ),
+      vscode.commands.registerCommand("taskMosaic.cancelTask", (value) =>
+        this.cancelTask(value),
+      ),
+      vscode.commands.registerCommand("taskMosaic.cancelAll", () => {
+        const count = this.coordinator.cancelAllGroups();
+        void vscode.window.showInformationMessage(
+          count > 0
+            ? `Cancelling ${count} task(s).`
+            : "No group tasks are running.",
+        );
+      }),
+    );
   }
 
-  private createRunTaskCommand(): vscode.Disposable {
-    const command = vscode.commands.registerCommand('taskMosaic.runTask', async (taskOrTreeItem: Task | TaskTreeItem) => {
-      // Extract task from tree item if needed
-      const task = taskOrTreeItem instanceof TaskTreeItem ? taskOrTreeItem.task : taskOrTreeItem;
-      
-      if (!task) {
-        vscode.window.showErrorMessage('Task not found');
-        return;
-      }
-      const framework = FrameworkRegistry.getFramework(task.frameworkName);
-      if (!framework) {
-        vscode.window.showErrorMessage(`Framework ${task.frameworkName} not found`);
-        return;
-      }
-      try {
-        this.treeProvider.refresh();
-        await this.executionManager.executeTask(task, { cwd: task.cwd });
-      } catch (error) {
-        this.treeProvider.refresh();
-        vscode.window.showErrorMessage(`Failed to run task: ${error}`);
-      }
-    });
-    return command;
+  private async runTask(
+    value: unknown,
+    invocation: TaskInvocation = {},
+  ): Promise<void> {
+    const task = this.resolveTask(value);
+    if (!task) {
+      void vscode.window.showErrorMessage("Task not found.");
+      return;
+    }
+    try {
+      await this.coordinator.runTask(task, invocation);
+    } catch (error: unknown) {
+      void vscode.window.showErrorMessage(
+        `Failed to run ${task.label}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
-  private createRunTaskWithArgsCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runTaskWithArgs', async (taskOrTreeItem: Task | TaskTreeItem) => {
-      // Extract task from tree item if needed
-      const task = taskOrTreeItem instanceof TaskTreeItem ? taskOrTreeItem.task : taskOrTreeItem;
-      
-      if (!task) {
-        vscode.window.showErrorMessage('No task selected');
-        return;
-      }
-      const args = await vscode.window.showInputBox({
-        prompt: 'Enter arguments for the task',
-        placeHolder: 'e.g., --coverage --verbose'
-      });
-      if (args === undefined) return;
-      const framework = FrameworkRegistry.getFramework(task.frameworkName);
-      if (!framework) {
-        vscode.window.showErrorMessage(`Framework ${task.frameworkName} not found`);
-        return;
-      }
-      try {
-        this.treeProvider.refresh();
-        await this.executionManager.executeTask(task, {
-          cwd: task.cwd,
-          taskArgs: args.split(' ').filter(arg => arg.trim())
-        });
-      } catch (error) {
-        this.treeProvider.refresh();
-        vscode.window.showErrorMessage(`Failed to run task: ${error}`);
-      }
-    });
+  private async runTaskWithArgs(value: unknown): Promise<void> {
+    const task = this.resolveTask(value);
+    if (!task) {
+      void vscode.window.showErrorMessage("Task not found.");
+      return;
+    }
+    const invocation = await this.promptForInvocation([task]);
+    if (invocation) {
+      await this.runTask(task, invocation);
+    }
   }
 
-  private createRunTaskVerboseCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runTaskVerbose', async (taskOrTreeItem: Task | TaskTreeItem) => {
-      // Extract task from tree item if needed
-      const task = taskOrTreeItem instanceof TaskTreeItem ? taskOrTreeItem.task : taskOrTreeItem;
-      
-      if (!task) {
-        vscode.window.showErrorMessage('No task selected');
-        return;
-      }
-      const framework = FrameworkRegistry.getFramework(task.frameworkName);
-      if (!framework) {
-        vscode.window.showErrorMessage(`Framework ${task.frameworkName} not found`);
-        return;
-      }
-      try {
-        this.treeProvider.refresh();
-        await this.executionManager.executeTask(task, {
-          cwd: task.cwd,
-          runnerArgs: ['-v'] // Add verbose flag
-        });
-      } catch (error) {
-        this.treeProvider.refresh();
-        vscode.window.showErrorMessage(`Failed to run task: ${error}`);
-      }
-    });
+  private async runAllDefaults(): Promise<void> {
+    await this.coordinator.runGroup(
+      "All default tasks",
+      this.taskManager.findTasks({ role: "default" }),
+    );
   }
 
-  private createRunAllDefaultCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runAllDefaultTasks', async () => {
-      const defaultTasks = this.taskManager.getAllTasks().filter(task => task.isDefault);
-
-      if (defaultTasks.length === 0) {
-        vscode.window.showInformationMessage('No default tasks found');
-        return;
-      }
-
-      for (const task of defaultTasks) {
-    await vscode.commands.executeCommand('taskMosaic.runTask', task);
-      }
-    });
+  private async runGroup(
+    value: unknown,
+    invocation: TaskInvocation = {},
+  ): Promise<void> {
+    if (!(value instanceof TaskTreeItem)) {
+      void vscode.window.showErrorMessage("Task group not found.");
+      return;
+    }
+    const tasks = tasksForGroup(this.taskManager, value);
+    await this.coordinator.runGroup(
+      value.label?.toString() || "Task group",
+      tasks,
+      invocation,
+    );
   }
 
-  private createRunParentTaskCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runParentTask', async (task) => {
-      if (!task) {
-        vscode.window.showErrorMessage('No task selected');
-        return;
-      }
-
-      const data = task.getData();
-      if (!data || !data.matrixGroup) {
-        vscode.window.showErrorMessage('No matrix group found for this task');
-        return;
-      }
-
-      const matrixTasks = this.taskManager.getTasksByMatrixGroup(data.matrixGroup);
-      for (const matrixTask of matrixTasks) {
-    await vscode.commands.executeCommand('taskMosaic.runTask', matrixTask);
-      }
-    });
+  private async runGroupWithArgs(value: unknown): Promise<void> {
+    if (!(value instanceof TaskTreeItem)) {
+      void vscode.window.showErrorMessage("Task group not found.");
+      return;
+    }
+    const tasks = tasksForGroup(this.taskManager, value);
+    const invocation = await this.promptForInvocation(tasks);
+    if (invocation) {
+      await this.runGroup(value, invocation);
+    }
   }
 
-  private createRunTagGroupCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runTagGroup', async (treeItem) => {
-      if (!treeItem || !treeItem.data) {
-        vscode.window.showErrorMessage('No category group selected');
-        return;
-      }
-
-      const categoryTasks = this.taskManager.getTasksByCategoryGroup(treeItem.data);
-      if (categoryTasks.length === 0) {
-        vscode.window.showInformationMessage(`No tasks found in category: ${treeItem.data}`);
-        return;
-      }
-
-      for (const task of categoryTasks) {
-    await vscode.commands.executeCommand('taskMosaic.runTask', task);
-      }
-    });
+  private cancelTask(value: unknown): void {
+    const task = this.resolveTask(value);
+    if (!task || !this.coordinator.cancelTask(task.key)) {
+      void vscode.window.showInformationMessage(
+        "The selected task is not running.",
+      );
+    }
   }
 
-  private createRunParentTaskWithArgsCommand(): vscode.Disposable {
-    return vscode.commands.registerCommand('taskMosaic.runParentTaskWithArgs', async (task) => {
-      if (!task) {
-        vscode.window.showErrorMessage('No task selected');
-        return;
-      }
+  private resolveTask(value: unknown): DiscoveredTask | undefined {
+    if (typeof value === "string") {
+      return this.taskManager.getTask(value as TaskKey);
+    }
+    if (value instanceof TaskTreeItem) {
+      return value.task;
+    }
+    if (value && typeof value === "object" && "key" in value) {
+      return this.taskManager.getTask(
+        String((value as { key: unknown }).key) as TaskKey,
+      );
+    }
+    return undefined;
+  }
 
-      const data = task.getData();
-      if (!data || !data.matrixGroup) {
-        vscode.window.showErrorMessage('No matrix group found for this task');
-        return;
-      }
-
-      const args = await vscode.window.showInputBox({
-        prompt: 'Enter arguments for all tasks in the matrix group',
-        placeHolder: 'e.g., --coverage --verbose'
-      });
-
-      if (args === undefined) return;
-
-      const matrixTasks = this.taskManager.getTasksByMatrixGroup(data.matrixGroup);
-      for (const matrixTask of matrixTasks) {
-        await vscode.commands.executeCommand('taskMosaic.runTaskWithArgs', matrixTask);
-      }
+  private async promptForInvocation(
+    tasks: DiscoveredTask[],
+  ): Promise<TaskInvocation | undefined> {
+    const sourceIds = [...new Set(tasks.map((task) => task.sourceId))];
+    if (sourceIds.length !== 1) {
+      void vscode.window.showErrorMessage(
+        "Select tasks from one source before providing input.",
+      );
+      return undefined;
+    }
+    const adapter = this.registry.get(sourceIds[0])?.invocationInput;
+    if (!adapter) {
+      void vscode.window.showErrorMessage(
+        "This task source does not accept interactive input.",
+      );
+      return undefined;
+    }
+    const input = await vscode.window.showInputBox({
+      prompt: adapter.prompt,
+      placeHolder: adapter.placeHolder,
     });
+    if (input === undefined) {
+      return undefined;
+    }
+    try {
+      return adapter.parse(input);
+    } catch (error: unknown) {
+      void vscode.window.showErrorMessage(
+        `Invalid arguments: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
   }
 }

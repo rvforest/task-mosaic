@@ -1,32 +1,51 @@
-import { Task, TaskStatus } from '../../../core/tasks/types';
-import * as vscode from 'vscode';
-import { TaskManager } from '../../../core/task-manager';
-import { TaskTreeItem } from './TaskTreeItem';
-import { TaskGroupingService } from './TaskGroupingService';
-import { TaskTreeItemType, TaskTreeViewMode } from './types';
+import * as vscode from "vscode";
 
-export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeItem> {
-  private _onDidChangeTreeData: vscode.EventEmitter<TaskTreeItem | undefined | null | void> = new vscode.EventEmitter<TaskTreeItem | undefined | null | void>();
-  readonly onDidChangeTreeData: vscode.Event<TaskTreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
+import { TaskManager } from "../../../core/task-manager";
+import { TaskSourceRegistry } from "../../../core/task-source/task-source-registry";
+import {
+  DiscoveredTask,
+  ProjectKey,
+  TaskSourceId,
+} from "../../../core/tasks/types";
+import { TaskTreeItem } from "./TaskTreeItem";
+import { TaskTreeViewMode } from "./types";
 
-  private currentViewMode: TaskTreeViewMode = TaskTreeViewMode.BY_CATEGORY;
-  private groupingService = new TaskGroupingService();
-  
-  // Cache the status provider to avoid creating new closures for every task
-  private readonly statusProvider = this.createStatusProvider();
+const VIEW_MODE_STATE_KEY = "taskMosaic.viewMode";
+
+export class TaskTreeProvider
+  implements vscode.TreeDataProvider<TaskTreeItem>, vscode.Disposable
+{
+  private readonly changeEmitter = new vscode.EventEmitter<
+    TaskTreeItem | undefined | null | void
+  >();
+  private readonly removeManagerListener: () => void;
+  private currentViewMode: TaskTreeViewMode;
+  readonly onDidChangeTreeData = this.changeEmitter.event;
 
   constructor(
-    private taskManager: TaskManager,
-    private context: vscode.ExtensionContext,
-    private outputChannel?: vscode.OutputChannel
-  ) {}
-
-  refresh(): void {
-    this._onDidChangeTreeData.fire();
+    private readonly taskManager: TaskManager,
+    private readonly registry: TaskSourceRegistry,
+    private readonly workspaceState: vscode.Memento,
+  ) {
+    this.currentViewMode = workspaceState.get<TaskTreeViewMode>(
+      VIEW_MODE_STATE_KEY,
+      TaskTreeViewMode.BY_TAG,
+    );
+    this.removeManagerListener = taskManager.onDidChange(() => this.refresh());
   }
 
-  setViewMode(mode: TaskTreeViewMode): void {
+  dispose(): void {
+    this.removeManagerListener();
+    this.changeEmitter.dispose();
+  }
+
+  refresh(): void {
+    this.changeEmitter.fire();
+  }
+
+  async setViewMode(mode: TaskTreeViewMode): Promise<void> {
     this.currentViewMode = mode;
+    await this.workspaceState.update(VIEW_MODE_STATE_KEY, mode);
     this.refresh();
   }
 
@@ -38,164 +57,284 @@ export class TaskTreeProvider implements vscode.TreeDataProvider<TaskTreeItem> {
     return element;
   }
 
-  getChildren(element?: TaskTreeItem): Promise<TaskTreeItem[]> {
-    try {
-      if (!element) {
-        // Root level - always show frameworks
-        return this.getRootItems();
-      }
-
-      const allTasks = this.taskManager.getAllTasks();
-      
-      switch (element.itemType) {
-        case TaskTreeItemType.ROOT_FOLDER:
-          return this.getItemsForWorkspaceRoot(element.data || '');
-        case TaskTreeItemType.FRAMEWORK:
-          return Promise.resolve(this.groupingService.getTasksForFramework(
-            allTasks, 
-            element.data || '', 
-            this.currentViewMode,
-            (task: Task) => this.createTaskItem(task),
-            this.statusProvider
-          ));
-        case TaskTreeItemType.MATRIX_GROUP:
-          // Parse the matrix group data to get framework and matrix group name
-          try {
-            if (!element.data) {
-              console.error('Matrix group has no data');
-              return Promise.resolve([]);
-            }
-            const matrixGroupData = JSON.parse(element.data);
-            const frameworkTasks = allTasks.filter(task => task.frameworkName === matrixGroupData.frameworkName);
-            return Promise.resolve(this.groupingService.getTasksForMatrixGroup(
-              frameworkTasks,
-              matrixGroupData.matrixGroup,
-              (task: Task) => this.createTaskItem(task)
-            ));
-          } catch (error) {
-            console.error('Error parsing matrix group data:', error);
-            return Promise.resolve([]);
-          }
-        case TaskTreeItemType.CATEGORY_GROUP:
-          return Promise.resolve(this.groupingService.getTasksForCategoryGroup(
-            allTasks,
-            element.data,
-            (task: Task) => this.createTaskItem(task)
-          ));
-        default:
-          return Promise.resolve([]);
-      }
-    } catch (error) {
-      console.error('Error getting tree children:', error);
-      return Promise.resolve([new TaskTreeItem(
-        'Error loading tasks',
-        vscode.TreeItemCollapsibleState.None,
-        TaskTreeItemType.TASK,
-        null
-      )]);
+  getChildren(element?: TaskTreeItem): vscode.ProviderResult<TaskTreeItem[]> {
+    if (!element) {
+      return this.rootItems();
+    }
+    switch (element.kind) {
+      case "workspace":
+        return this.itemsForWorkspace(element.data.workspaceUri!);
+      case "project":
+        return this.itemsForProject(element.data.projectKey!);
+      case "source":
+        return this.itemsForSource(
+          element.data.projectKey!,
+          element.data.sourceId!,
+        );
+      case "group":
+        return this.taskItems(tasksForGroup(this.taskManager, element));
+      default:
+        return [];
     }
   }
 
-  private async getRootItems(): Promise<TaskTreeItem[]> {
-    try {
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-
-      if (workspaceFolders && workspaceFolders.length > 1) {
-        return workspaceFolders.map(folder => new TaskTreeItem(
-          folder.name,
-          vscode.TreeItemCollapsibleState.Expanded,
-          TaskTreeItemType.ROOT_FOLDER,
-          folder.uri.fsPath
-        ));
-      }
-
-      const allTasks = this.taskManager.getAllTasks();
-      
-      if (allTasks.length === 0) {
-        return [new TaskTreeItem(
-          'No tasks found',
-          vscode.TreeItemCollapsibleState.None,
-          TaskTreeItemType.TASK,
-          null
-        )];
-      }
-
-      // Always return frameworks at root level
-      return this.groupingService.getRootItems(allTasks, this.statusProvider);
-    } catch (error) {
-      console.error('Error getting root items:', error);
-      return [new TaskTreeItem(
-        'Error loading tasks',
-        vscode.TreeItemCollapsibleState.None,
-        TaskTreeItemType.TASK,
-        null
-      )];
+  private rootItems(): TaskTreeItem[] {
+    const state = this.taskManager.getDiscoveryState();
+    if (state.phase === "untrusted") {
+      return [
+        this.stateItem("Trust this workspace to discover tasks", "shield", {
+          command: "workbench.trust.manage",
+          title: "Manage Workspace Trust",
+        }),
+      ];
     }
-  }
 
-  private async getItemsForWorkspaceRoot(workspaceRoot: string): Promise<TaskTreeItem[]> {
-    try {
-      const allTasks = this.taskManager.getAllTasks().filter(task => 
-        task.cwd.startsWith(workspaceRoot)
+    const prefix: TaskTreeItem[] = [];
+    if (state.phase === "loading") {
+      prefix.push(this.stateItem("Refreshing tasks...", "loading~spin"));
+    }
+    if (state.truncated) {
+      prefix.push(
+        this.stateItem("Project discovery limit reached", "warning", {
+          command: "workbench.action.openSettings",
+          title: "Open Settings",
+          arguments: ["taskMosaic.discovery.maxProjects"],
+        }),
       );
+    }
+    if (state.projects.length === 0) {
+      return prefix.length > 0
+        ? prefix
+        : [this.stateItem("No task projects found", "search")];
+    }
 
-      // Always return frameworks for workspace roots
-      return this.groupingService.getRootItems(allTasks, this.statusProvider);
-    } catch (error) {
-      console.error('Error getting workspace root items:', error);
+    const workspaceUris = [
+      ...new Set(state.projects.map((project) => project.workspaceUri)),
+    ];
+    if (workspaceUris.length > 1) {
+      return [
+        ...prefix,
+        ...workspaceUris.map((workspaceUri) => {
+          const project = state.projects.find(
+            (candidate) => candidate.workspaceUri === workspaceUri,
+          )!;
+          return new TaskTreeItem(
+            project.workspaceName,
+            vscode.TreeItemCollapsibleState.Expanded,
+            "workspace",
+            { workspaceUri },
+          );
+        }),
+      ];
+    }
+    return [...prefix, ...this.itemsForWorkspace(workspaceUris[0])];
+  }
+
+  private itemsForWorkspace(workspaceUri: string): TaskTreeItem[] {
+    const projects = this.taskManager
+      .getDiscoveryState()
+      .projects.filter((project) => project.workspaceUri === workspaceUri);
+    if (projects.length > 1) {
+      return projects.map(
+        (project) =>
+          new TaskTreeItem(
+            project.relativePath,
+            vscode.TreeItemCollapsibleState.Expanded,
+            "project",
+            { workspaceUri, projectKey: project.key },
+          ),
+      );
+    }
+    return projects.length === 1 ? this.itemsForProject(projects[0].key) : [];
+  }
+
+  private itemsForProject(projectKey: ProjectKey): TaskTreeItem[] {
+    const state = this.taskManager.getDiscoveryState();
+    const project = state.projects.find(
+      (candidate) => candidate.key === projectKey,
+    );
+    if (!project) {
       return [];
     }
-  }
-
-  private createTaskItem(task: Task): TaskTreeItem {
-    try {
-      // Don't include status in the label - it will be shown via icons and can change frequently
-      const defaultSuffix = task.isDefault ? ' [default]' : '';
-      return new TaskTreeItem(
-        `${task.name}${defaultSuffix}`,
-        vscode.TreeItemCollapsibleState.None,
-        TaskTreeItemType.TASK,
-        task.taskId,
-        task,
-        this.statusProvider // Use the cached status provider
-      );
-    } catch (error) {
-      console.error('Error creating task item:', error);
-      return new TaskTreeItem(
-        `Error: ${task.name}`,
-        vscode.TreeItemCollapsibleState.None,
-        TaskTreeItemType.TASK,
-        task.taskId,
-        task,
-        () => 'failed' // Error state status provider
-      );
+    const items: TaskTreeItem[] = [];
+    const error = state.errors.get(projectKey);
+    if (error) {
+      const item = this.stateItem(error.message, "error", {
+        command: "taskMosaic.showOutput",
+        title: "Show Output",
+      });
+      item.tooltip = error.detail || error.message;
+      items.push(item);
     }
+    const source = this.registry.get(project.sourceId);
+    items.push(
+      new TaskTreeItem(
+        source?.displayName ?? project.sourceId,
+        vscode.TreeItemCollapsibleState.Expanded,
+        "source",
+        { projectKey, sourceId: project.sourceId },
+      ),
+    );
+    return items;
   }
 
-  /**
-   * Creates a status provider function that handles task status lookups.
-   * Includes defensive error handling for missing tasks.
-   */
-  private createStatusProvider(): (taskId: string) => TaskStatus {
-    return (taskId: string) => {
-      try {
-        return this.taskManager.getTaskStatus(taskId);
-      } catch {
-        // Task no longer exists, return idle as safe fallback for UI
-        return 'idle';
+  private itemsForSource(
+    projectKey: ProjectKey,
+    sourceId: TaskSourceId,
+  ): TaskTreeItem[] {
+    const tasks = this.taskManager.findTasks({ projectKey, sourceId });
+    if (tasks.length === 0) {
+      return [this.stateItem("No tasks found", "circle-outline")];
+    }
+    const groupKind = this.groupKindForView();
+    if (!groupKind) {
+      return this.taskItems(tasks);
+    }
+
+    const memberships = new Map<string, string>();
+    for (const task of tasks) {
+      for (const group of task.groups) {
+        if (group.kind === groupKind) {
+          memberships.set(group.id, group.label);
+        }
       }
-    };
+    }
+    const items = [...memberships]
+      .sort((left, right) => left[1].localeCompare(right[1]))
+      .map(([groupId, label]) =>
+        this.groupItem(
+          label,
+          tasks.filter((task) =>
+            task.groups.some(
+              (group) => group.kind === groupKind && group.id === groupId,
+            ),
+          ),
+          { projectKey, sourceId, groupKind, groupId },
+        ),
+      );
+    const ungrouped = tasks.filter(
+      (task) => !task.groups.some((group) => group.kind === groupKind),
+    );
+    if (ungrouped.length > 0) {
+      items.push(
+        this.groupItem("Ungrouped", ungrouped, {
+          projectKey,
+          sourceId,
+          groupKind,
+        }),
+      );
+    }
+    return items;
   }
 
-
-  // Method to get a specific task item by ID (useful for testing or external references)
-  getTaskItem(taskId: string): TaskTreeItem | undefined {
-    try {
-      const task = this.taskManager.getTask(taskId);
-      return task ? this.createTaskItem(task) : undefined;
-    } catch (error) {
-      console.error(`Error getting task item for ${taskId}:`, error);
-      return undefined;
+  private groupKindForView(): string | undefined {
+    switch (this.currentViewMode) {
+      case TaskTreeViewMode.BY_TAG:
+        return "tag";
+      case TaskTreeViewMode.BY_MATRIX:
+        return "matrix";
+      default:
+        return undefined;
     }
   }
+
+  private groupItem(
+    label: string,
+    tasks: DiscoveredTask[],
+    data: {
+      projectKey: ProjectKey;
+      sourceId: TaskSourceId;
+      groupKind: string;
+      groupId?: string;
+    },
+  ): TaskTreeItem {
+    const item = new TaskTreeItem(
+      `${label} (${tasks.length})`,
+      vscode.TreeItemCollapsibleState.Collapsed,
+      "group",
+      data,
+    );
+    item.tooltip = `${tasks.length} task${tasks.length === 1 ? "" : "s"}`;
+    return item;
+  }
+
+  private taskItems(tasks: DiscoveredTask[]): TaskTreeItem[] {
+    return [...tasks]
+      .sort((left, right) => left.label.localeCompare(right.label))
+      .map((task) => {
+        const status = this.taskManager.getTaskStatus(task.key);
+        const running = ["queued", "running"].includes(status);
+        const item = new TaskTreeItem(
+          `${task.label}${task.roles.includes("default") ? " [default]" : ""}`,
+          vscode.TreeItemCollapsibleState.None,
+          "task",
+          { projectKey: task.projectKey, sourceId: task.sourceId },
+          task,
+          status,
+          task.capabilities.runnable
+            ? {
+                command: running
+                  ? "taskMosaic.cancelTask"
+                  : "taskMosaic.runTask",
+                title: running ? "Cancel Task" : "Run Task",
+                arguments: [task.key],
+              }
+            : undefined,
+        );
+        item.description = status === "idle" ? undefined : status;
+        item.tooltip = [
+          task.description || task.label,
+          `Source: ${task.sourceId}`,
+          `Status: ${status}`,
+        ].join("\n");
+        return item;
+      });
+  }
+
+  private stateItem(
+    label: string,
+    icon: string,
+    command?: vscode.Command,
+  ): TaskTreeItem {
+    const item = new TaskTreeItem(
+      label,
+      vscode.TreeItemCollapsibleState.None,
+      "state",
+      {},
+      undefined,
+      "idle",
+      command,
+    );
+    item.iconPath = new vscode.ThemeIcon(icon);
+    return item;
+  }
+}
+
+export function tasksForGroup(
+  taskManager: TaskManager,
+  item: TaskTreeItem,
+): DiscoveredTask[] {
+  if (
+    item.kind !== "group" ||
+    !item.data.projectKey ||
+    !item.data.sourceId ||
+    !item.data.groupKind
+  ) {
+    return [];
+  }
+  const tasks = taskManager.findTasks({
+    projectKey: item.data.projectKey,
+    sourceId: item.data.sourceId,
+  });
+  if (item.data.groupId === undefined) {
+    return tasks.filter(
+      (task) =>
+        !task.groups.some((group) => group.kind === item.data.groupKind),
+    );
+  }
+  return taskManager.findTasks({
+    projectKey: item.data.projectKey,
+    sourceId: item.data.sourceId,
+    group: { kind: item.data.groupKind, id: item.data.groupId },
+  });
 }

@@ -3,6 +3,7 @@
 # =============================
 
 .venv/
+.nox/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -109,6 +110,7 @@ tags
 
 # Local History for Visual Studio Code
 .history/
+.vscode-test/
 
 # Built Visual Studio Code Extensions
 *.vsix
@@ -273,6 +275,7 @@ node_modules/
 # Compiled JavaScript output
 out/
 dist/
+dist-test/
 
 # Coverage directory used by tools like istanbul
 coverage/
