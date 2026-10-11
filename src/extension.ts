@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { TaskManager } from "./core/task-manager";
 import { TaskSourceRegistry } from "./core/task-source/task-source-registry";
 import { NoxTaskSource } from "./frameworks/nox/nox-task-source";
-import { getNoxConfig } from "./vscode/configuration";
+import { getNoxConfig } from "./frameworks/nox/nox-vscode-configuration";
 import { NativeTaskService, TASK_TYPE } from "./vscode/native-task-service";
 import { WorkspaceTaskService } from "./vscode/workspace-task-service";
 

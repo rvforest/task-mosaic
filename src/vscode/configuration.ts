@@ -1,7 +1,5 @@
 import * as vscode from "vscode";
 
-import { NoxCommandConfig } from "../frameworks/nox/nox-task-source";
-
 export const DEFAULT_DISCOVERY_EXCLUDES = [
   "**/.git/**",
   "**/.hg/**",
@@ -13,15 +11,6 @@ export const DEFAULT_DISCOVERY_EXCLUDES = [
   "**/build/**",
   "**/dist/**",
 ];
-
-export function getNoxConfig(resource?: vscode.Uri): NoxCommandConfig {
-  const config = vscode.workspace.getConfiguration("taskMosaic.nox", resource);
-  return {
-    command: config.get<string>("command", "nox"),
-    commandArgs: config.get<string[]>("commandArgs", []),
-    runnerArgs: config.get<string[]>("runnerArgs", []),
-  };
-}
 
 export function getDiscoveryConfig(): {
   exclude: string[];
