@@ -276,24 +276,24 @@
     "watch": "tsc --watch -p tsconfig.json"
   },
   "dependencies": {
-    "string-argv": "^0.3.2"
+    "string-argv": "^0.4.0"
   },
   "overrides": {
     "brace-expansion": "^5.0.12"
   },
   "devDependencies": {
-    "@swc/core": "^1.12.9",
+    "@swc/core": "^1.16.22",
     "@swc/jest": "^0.2.38",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20.19.1",
-    "@types/vscode": "^1.101.0",
-    "@typescript-eslint/eslint-plugin": "^8.34.0",
+    "@types/node": "^26.6.6",
+    "@types/vscode": "^1.146.0",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.34.0",
-    "@vscode/test-electron": "^2.5.2",
-    "esbuild": "^0.25.5",
-    "eslint": "^9.29.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
     "jest": "^30.0.5",
-    "prettier": "^3.6.0",
-    "typescript": "^5.8.3"
+    "prettier": "^3.10.1",
+    "typescript": "^7.0.2"
   }
 }
